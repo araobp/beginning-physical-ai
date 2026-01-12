@@ -25,6 +25,7 @@ const write = async (port, cmd) => {
 
 export async function POST({ url }) {
     const switch_ = url.searchParams.get('switch');
+
     var cmd;
     if (switch_ == "on") {
         cmd = ON;
