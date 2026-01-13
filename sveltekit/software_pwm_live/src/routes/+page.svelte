@@ -22,6 +22,8 @@
 	/** @type {WritableStreamDefaultWriter<Uint8Array> | undefined} */
 	let writer;
 	let output = $state("");
+	/** @type {HTMLPreElement} */
+	let outputElement;
 	let blinking = $state(false);
 	let brightness = $state(5);
 	let interval = $state(200);
@@ -38,6 +40,13 @@
 		// Restore API key from local storage if available
 		const storedKey = localStorage.getItem("gemini_api_key");
 		if (storedKey) apiKey = storedKey;
+	});
+
+	$effect(() => {
+		output; // Dependency registration
+		if (outputElement) {
+			outputElement.scrollTop = outputElement.scrollHeight;
+		}
 	});
 
 	const connect = async () => {
@@ -204,88 +213,114 @@
 	Controls the on-board LED on an Arduino UNO via Serial commands.
 </p>
 
-<!-- Main UI Layout -->
-<div class="control-group">
-	<button onclick={connect}>Connect Arduino</button>
-</div>
-
-<div class="control-group gemini-box">
-	<h2>Gemini Live</h2>
-	<div class="input-row">
-		<label>
-			API Key:
-			<input
-				type="password"
-				bind:value={apiKey}
-				placeholder="Enter Gemini API Key"
-			/>
-		</label>
-	</div>
-	<div class="status-row">
-		<span>Status: {geminiStatus}</span>
-		<button onclick={toggleLive}
-			>{liveActive ? "Stop Live" : "Start Live"}</button
-		>
-	</div>
-	<div class="audio-levels">
-		<div class="level-row">
-			<span class="label">Mic</span>
-			<div class="meter">
-				<div class="fill" style="width: {Math.min(100, micLevel * 100)}%"></div>
-			</div>
+<div class="container">
+	<div class="left-panel">
+		<!-- Main UI Layout -->
+		<div class="control-group">
+			<button onclick={connect}>Connect Arduino</button>
 		</div>
-		<div class="level-row">
-			<span class="label">Speaker</span>
-			<div class="meter">
-				<div class="fill" style="width: {Math.min(100, speakerLevel * 100)}%"></div>
+
+		<div class="control-group gemini-box">
+			<h2>Gemini Live</h2>
+			<div class="input-row">
+				<label>
+					API Key:
+					<input
+						type="password"
+						bind:value={apiKey}
+						placeholder="Enter Gemini API Key"
+					/>
+				</label>
 			</div>
+			<div class="status-row">
+				<span>Status: {geminiStatus}</span>
+				<button onclick={toggleLive}
+					>{liveActive ? "Stop Live" : "Start Live"}</button
+				>
+			</div>
+			<div class="audio-levels">
+				<div class="level-row">
+					<span class="label">Mic</span>
+					<div class="meter">
+						<div class="fill" style="width: {Math.min(100, micLevel * 100)}%"></div>
+					</div>
+				</div>
+				<div class="level-row">
+					<span class="label">Speaker</span>
+					<div class="meter">
+						<div class="fill" style="width: {Math.min(100, speakerLevel * 100)}%"></div>
+					</div>
+				</div>
+			</div>
+			<p class="hint">
+				Try saying: "Turn on blinking", "Set brightness to 5", "Set interval to
+				100ms"
+			</p>
+		</div>
+
+		<div class="control-group">
+			<label>
+				<input
+					type="checkbox"
+					bind:checked={blinking}
+					onchange={updateBlink}
+				/>
+				Blinking
+			</label>
+		</div>
+
+		<div class="control-group">
+			<label>
+				Brightness: {brightness}
+				<input
+					type="range"
+					min="0"
+					max="10"
+					bind:value={brightness}
+					onchange={updateBrightness}
+				/>
+			</label>
+		</div>
+
+		<div class="control-group">
+			<label>
+				Interval (ms):
+				<input type="number" bind:value={interval} onchange={updateInterval} />
+			</label>
+		</div>
+
+		<div class="control-group">
+			<button onclick={getStatus}>Sync Status</button>
 		</div>
 	</div>
-	<p class="hint">
-		Try saying: "Turn on blinking", "Set brightness to 5", "Set interval to
-		100ms"
-	</p>
-</div>
 
-<div class="control-group">
-	<label>
-		<input
-			type="checkbox"
-			bind:checked={blinking}
-			onchange={updateBlink}
-		/>
-		Blinking
-	</label>
+	<div class="right-panel">
+		<h2>Serial Output</h2>
+		<pre bind:this={outputElement}>{output}</pre>
+	</div>
 </div>
-
-<div class="control-group">
-	<label>
-		Brightness: {brightness}
-		<input
-			type="range"
-			min="0"
-			max="10"
-			bind:value={brightness}
-			onchange={updateBrightness}
-		/>
-	</label>
-</div>
-
-<div class="control-group">
-	<label>
-		Interval (ms):
-		<input type="number" bind:value={interval} onchange={updateInterval} />
-	</label>
-</div>
-
-<div class="control-group">
-	<button onclick={getStatus}>Sync Status</button>
-</div>
-
-<h2>Serial Output</h2>
-<pre>{output}</pre>
 
 <style>
+	.container {
+		display: flex;
+		gap: 20px;
+	}
+	.left-panel {
+		flex: 1;
+		min-width: 300px;
+	}
+	.left-panel > :last-child {
+		margin-bottom: 0;
+	}
+	.right-panel {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+	}
+	.right-panel h2 {
+		margin-top: 0;
+		margin-bottom: 0;
+	}
 	.control-group {
 		margin-bottom: 1.5em;
 		padding: 10px;
@@ -333,8 +368,10 @@
 		border-radius: 5px;
 		white-space: pre-wrap;
 		word-wrap: break-word;
-		max-height: 300px;
 		overflow-y: auto;
+		flex-grow: 1;
+		min-height: 0; /* Prevents flexbox overflow issue */
+		height: 600px;
 	}
 	.hint {
 		font-size: 0.9em;
