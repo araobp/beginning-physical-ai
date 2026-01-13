@@ -25,6 +25,8 @@
 	let blinking = $state(false);
 	let brightness = $state(5);
 	let interval = $state(200);
+	let micLevel = $state(0);
+	let speakerLevel = $state(0);
 
 	let apiKey = $state("");
 	let liveActive = $state(false);
@@ -157,10 +159,16 @@
 				onDisconnect: () => {
 					geminiStatus = "Disconnected";
 					liveActive = false;
+					micLevel = 0;
+					speakerLevel = 0;
 				},
 				onError: (/** @type {any} */ e) => {
 					geminiStatus = `Error: ${e.message || e}`;
 					liveActive = false;
+				},
+				onVolume: (/** @type {number} */ input, /** @type {number} */ output) => {
+					micLevel = input;
+					speakerLevel = output;
 				},
 				onToolCall: async (name, args) => {
 					console.log("Tool called:", name, args);
@@ -218,6 +226,20 @@
 		<button onclick={toggleLive}
 			>{liveActive ? "Stop Live" : "Start Live"}</button
 		>
+	</div>
+	<div class="audio-levels">
+		<div class="level-row">
+			<span class="label">Mic</span>
+			<div class="meter">
+				<div class="fill" style="width: {Math.min(100, micLevel * 100)}%"></div>
+			</div>
+		</div>
+		<div class="level-row">
+			<span class="label">Speaker</span>
+			<div class="meter">
+				<div class="fill" style="width: {Math.min(100, speakerLevel * 100)}%"></div>
+			</div>
+		</div>
 	</div>
 	<p class="hint">
 		Try saying: "Turn on blinking", "Set brightness to 5", "Set interval to
@@ -324,5 +346,29 @@
 		text-align: center;
 		color: #555;
 		margin-bottom: 20px;
+	}
+	.audio-levels {
+		margin-top: 15px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.level-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-size: 0.9em;
+	}
+	.meter {
+		flex: 1;
+		height: 8px;
+		background: #ddd;
+		border-radius: 4px;
+		overflow: hidden;
+	}
+	.fill {
+		height: 100%;
+		background: #28a745;
+		transition: width 0.1s ease;
 	}
 </style>

@@ -4,6 +4,7 @@
  * @property {() => void} [onDisconnect]
  * @property {(error: Event|Error) => void} [onError]
  * @property {(name: string, args: Record<string, any>) => Promise<any>} [onToolCall]
+ * @property {(input: number, output: number) => void} [onVolume]
  */
 
 export class GeminiLiveClient {
@@ -27,6 +28,9 @@ export class GeminiLiveClient {
          * The timestamp (in AudioContext time) when the next scheduled audio chunk should start playing.
          */
         this.nextStartTime = 0;
+        this.inputAnalyser = null;
+        this.outputAnalyser = null;
+        this.volumeInterval = null;
     }
 
     /**
@@ -80,7 +84,7 @@ export class GeminiLiveClient {
                     speech_config: {
                         voice_config: {
                             prebuilt_voice_config: {
-                                voice_name: "Puck"
+                                voice_name: "Charon"
                             }
                         }
                     }
@@ -150,6 +154,10 @@ export class GeminiLiveClient {
         this.audioContext = new AudioContextClass({
             sampleRate: 24000
         });
+        
+        this.inputAnalyser = this.audioContext.createAnalyser();
+        this.outputAnalyser = this.audioContext.createAnalyser();
+        this.outputAnalyser.connect(this.audioContext.destination);
 
         try {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -189,7 +197,10 @@ export class GeminiLiveClient {
             }
         };
 
+        source.connect(this.inputAnalyser);
         source.connect(this.audioProcessor);
+        
+        this.startVolumeReporting();
     }
 
     /**
@@ -197,6 +208,7 @@ export class GeminiLiveClient {
      * Cleans up media tracks and worklet nodes.
      */
     stopAudioStream() {
+        this.stopVolumeReporting();
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => track.stop());
             this.mediaStream = null;
@@ -209,6 +221,37 @@ export class GeminiLiveClient {
             this.audioContext.close();
             this.audioContext = null;
         }
+        this.inputAnalyser = null;
+        this.outputAnalyser = null;
+    }
+
+    startVolumeReporting() {
+        if (this.volumeInterval) clearInterval(this.volumeInterval);
+        this.volumeInterval = setInterval(() => {
+            if (this.callbacks.onVolume) {
+                const getRMS = (/** @type {AnalyserNode | null} */ analyser) => {
+                    if (!analyser) return 0;
+                    const bufferLength = analyser.fftSize;
+                    const dataArray = new Uint8Array(bufferLength);
+                    analyser.getByteTimeDomainData(dataArray);
+                    let sum = 0;
+                    for (let i = 0; i < bufferLength; i++) {
+                        const x = (dataArray[i] - 128) / 128.0;
+                        sum += x * x;
+                    }
+                    return Math.sqrt(sum / bufferLength);
+                };
+                // Scale up a bit for better visibility
+                const inputVol = Math.min(1, getRMS(this.inputAnalyser) * 2);
+                const outputVol = Math.min(1, getRMS(this.outputAnalyser) * 2);
+                this.callbacks.onVolume(inputVol, outputVol);
+            }
+        }, 50);
+    }
+
+    stopVolumeReporting() {
+        if (this.volumeInterval) clearInterval(this.volumeInterval);
+        this.volumeInterval = null;
     }
 
     /**
@@ -360,7 +403,11 @@ export class GeminiLiveClient {
 
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
-        source.connect(this.audioContext.destination);
+        if (this.outputAnalyser) {
+            source.connect(this.outputAnalyser);
+        } else {
+            source.connect(this.audioContext.destination);
+        }
 
         // Schedule the audio to play at the correct time
         // If the scheduled time is in the past (e.g. latency), play immediately
