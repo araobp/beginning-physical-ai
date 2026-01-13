@@ -21,16 +21,16 @@
 	let reader;
 	/** @type {WritableStreamDefaultWriter<Uint8Array> | undefined} */
 	let writer;
-	let output = "";
-	let blinking = false;
-	let brightness = 5;
-	let interval = 200;
+	let output = $state("");
+	let blinking = $state(false);
+	let brightness = $state(5);
+	let interval = $state(200);
 
-	let apiKey = "";
-	let liveActive = false;
+	let apiKey = $state("");
+	let liveActive = $state(false);
 	/** @type {GeminiLiveClient | null} */
 	let geminiClient = null;
-	let geminiStatus = "Disconnected";
+	let geminiStatus = $state("Disconnected");
 
 	onMount(() => {
 		// Restore API key from local storage if available
@@ -48,6 +48,8 @@
 			writer = port.writable.getWriter();
 			startReading();
 			output += "Connected to Arduino\n";
+			// Wait for Arduino to reset and then synchronize status
+			setTimeout(getStatus, 2000);
 		} catch (error) {
 			// @ts-ignore
 			output += `Error: ${error.message}\n`;
@@ -63,6 +65,8 @@
 			const serialReader = port.readable.getReader();
 			// Store reference globally for cleanup/cancellation if needed later.
 			reader = serialReader;
+			const decoder = new TextDecoder();
+			let buffer = "";
 
 			// Constant read loop
 			while (true) {
@@ -70,8 +74,13 @@
 				if (done) {
 					break;
 				}
-				const text = new TextDecoder().decode(value);
-				output += text;
+				const chunk = decoder.decode(value, { stream: true });
+				output += chunk;
+				buffer += chunk;
+				const lines = buffer.split("\n");
+				buffer = lines.pop() || "";
+
+				lines.forEach(parseStatus);
 			}
 		} catch (error) {
 			// @ts-ignore
@@ -109,6 +118,15 @@
 
 	const getStatus = () => {
 		sendCommand("status");
+	};
+
+	const parseStatus = (/** @type {string} */ line) => {
+		const match = line.match(/blink=(\d+),brightness=(\d+),interval=(\d+)/);
+		if (match) {
+			blinking = match[1] === "1";
+			brightness = parseInt(match[2], 10);
+			interval = parseInt(match[3], 10);
+		}
 	};
 
 	/**
@@ -180,7 +198,7 @@
 
 <!-- Main UI Layout -->
 <div class="control-group">
-	<button on:click={connect}>Connect Arduino</button>
+	<button onclick={connect}>Connect Arduino</button>
 </div>
 
 <div class="control-group gemini-box">
@@ -197,7 +215,7 @@
 	</div>
 	<div class="status-row">
 		<span>Status: {geminiStatus}</span>
-		<button on:click={toggleLive}
+		<button onclick={toggleLive}
 			>{liveActive ? "Stop Live" : "Start Live"}</button
 		>
 	</div>
@@ -212,7 +230,7 @@
 		<input
 			type="checkbox"
 			bind:checked={blinking}
-			on:change={updateBlink}
+			onchange={updateBlink}
 		/>
 		Blinking
 	</label>
@@ -226,7 +244,7 @@
 			min="0"
 			max="10"
 			bind:value={brightness}
-			on:change={updateBrightness}
+			onchange={updateBrightness}
 		/>
 	</label>
 </div>
@@ -234,12 +252,12 @@
 <div class="control-group">
 	<label>
 		Interval (ms):
-		<input type="number" bind:value={interval} on:change={updateInterval} />
+		<input type="number" bind:value={interval} onchange={updateInterval} />
 	</label>
 </div>
 
 <div class="control-group">
-	<button on:click={getStatus}>Get Status</button>
+	<button onclick={getStatus}>Sync Status</button>
 </div>
 
 <h2>Serial Output</h2>
