@@ -1,0 +1,17 @@
+# Arduino build files
+*.o
+*.a
+*.elf
+*.eep
+*.hex
+*.bin
+*.lss
+*.sym
+*.map
+build/
+*.zip
+*.ino.cpp
+
+# Other
+.DS_Store
+*.log
