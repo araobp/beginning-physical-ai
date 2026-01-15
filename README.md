@@ -6,10 +6,25 @@
 
 マイルストーンごとにQiitaへ記事を投稿する。ICTエンジニアが小さな投資(1万円以下)でフィジカルAIの勉強を始めるための道筋を示したい。簡易LiDARや赤外線アレイセンサまでやると2万円を超えてしまうが。
 
+フルスタックで電子工作/Arduino/Python/HTML5/Unity/物理を網羅。小さなフィジカルAIシステムとしてまとめられるので、「フィジカルAIを始める」とう意味では良い構成。
+
 ## Qiita記事投稿
 
 1. [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://qiita.com/araobp/items/5ac9b141c64e4967b61e)
 2. ...
+
+## 構成
+
+```
+[USBカメラ]-----------------USB---------------------------------------------+
+                                                                           |
+[サーボモータコントローラ]---I2C---[4DoFロボットコントローラ]---USB Serial---[MCP Server]-----MCP-----[MCP Client]
+                                      |  Arduino UNO                   ラズパイ              SvelteKitベースウエブアプリ
+[センサ]-------------------------------+                                                     Unityベース4DoFロボットデジタルツイン
+
+
+
+```
 
 ## 部品・ツール
 
@@ -52,14 +67,26 @@
   </tr>
 </table>
 
-### MCPサーバ
+### Mac/PC/ラズパイ上で動作させる MCP Server
 
 => [FastMCPベースのMCPサーバ](python/mcp_server)
 
+### Arduinoベースの4DoFロボットコントローラ
+
+...
+
+### SvelteKitベースのウエブアプリ (MCP Client)
+
+...
+
+### Unityベースの4DoFロボットデジタルツイン (MCP Client)
+
+...
+
 ## ゴール
 
-- Amazonで購入中の[4軸ロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)をIKで制御
-- Arduino UNO R3をロボットコントローラとするが、４軸ロボットとの接続はAmazonで購入中の[この基板](https://www.amazon.co.jp/gp/product/B078YRJ8D7?ref=ppx_pt2_dt_b_prod_image)を経由。
+- Amazonで購入中の[4DoFロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)をIKで制御
+- Arduino UNO R3をロボットコントローラとするが、４DoFロボットとの接続はAmazonで購入中の[この基板](https://www.amazon.co.jp/gp/product/B078YRJ8D7?ref=ppx_pt2_dt_b_prod_image)を経由。
 - Arduino UNO R3をUSBシリアル経由でラズパイと接続
 - ラズパイへ接続したUSBカメラ画像からロボットベースの平面座標を得る、マーカーで位置合わせする、Gemini Robotics-ER向け。
 - MCPがUSBバスみたいなものと言うなら、その通りにMCPを使ってみる：ラズパイ<-MCP->SvelteKit, ラズパイ<-MCP->Unity、これは昔でいうCORBAとかRMIだね。この辺、ICTエンジニアの強み。
