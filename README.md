@@ -52,14 +52,18 @@ ICTエンジニアが小さな投資(1万円以下)でフィジカルAIの勉強
 
 ## ゴール
 
-- Amazonで購入中の[4軸ロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)を制御
+- Amazonで購入中の[4軸ロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)をIKで制御
 - Arduino UNO R3をロボットコントローラとするが、４軸ロボットとの接続はAmazonで購入中の[この基板](https://www.amazon.co.jp/gp/product/B078YRJ8D7?ref=ppx_pt2_dt_b_prod_image)を経由。
 - Arduino UNO R3をUSBシリアル経由でラズパイと接続
 - ラズパイへ接続したUSBカメラ画像からロボットベースの平面座標を得る、マーカーで位置合わせする
 - MCPがUSBバスみたいなものと言うなら、その通りにMCPを使ってみる：ラズパイ<-MCP->SvelteKit, ラズパイ<-MCP->Unity、これは昔でいうCORBAとかRMIだね。
 - SvelteKitでGemini Liveアプリをつくり、ロボットを音声で制御する
 - Unity上にロボットのデジタルツインをつくり、ロボットと動作を同期させる
-- STMicro製のI2C近接センサーと連携させる：簡易LiDAR、安全管理
+- STMicro製のI2C 8x8マトリクスの近接センサーと連携させる：簡易LiDAR（ピック、プレイスのx,y,z最適化）と安全管理
+
+たぶん、これを一通りやれば、私、フィジカルAIの仕組みを一通り知っていると言えるようになる。そこに至るまで、所用２ヶ月。
+
+これが発展し、超多間接ロボット（例えば人型ロボット）のIK動作の強化学習など行うと、本格的なフィジカルAIになる。
 
 ## My Arduino board
 
