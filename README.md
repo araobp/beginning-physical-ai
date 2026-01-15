@@ -8,8 +8,8 @@
 
 ## Qiita記事投稿
 
-(1) [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://qiita.com/araobp/items/5ac9b141c64e4967b61e)
-(2) ...
+1. [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://qiita.com/araobp/items/5ac9b141c64e4967b61e)
+2. ...
 
 ## 部品・ツール
 
