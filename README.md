@@ -6,6 +6,12 @@ ICTエンジニアが小さな投資(1万円以下)でフィジカルAIの勉強
 
 ## 部品・ツール
 
+### Camera Calibration用のチェスボード
+
+=> [OpenCVでチェスボード生成](python/chessboard)
+
+<img src="python/chessboard/chessboard_10x7.png" width="300px">
+
 ### ArUCOマーカー生成
 
 => [OpenCVでArUCOマーカー生成](python/aruco)
