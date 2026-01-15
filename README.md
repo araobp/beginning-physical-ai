@@ -4,6 +4,41 @@
 
 ICTエンジニアが小さな投資(1万円以下)でフィジカルAIの勉強を始めるための道筋を示したい。
 
+## 部品・ツール
+
+### ArUCOマーカー生成
+
+=> [OpenCVでArUCOマーカー生成](python/aruco)
+
+<table>
+  <tr>
+    <td>
+      <img src="python/aruco/marker_ID_1.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_2.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_3.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_4.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_5.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_6.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_7.png" width="80px">
+    </td>
+    <td>
+      <img src="python/aruco/marker_ID_8.png" width="80px">
+    </td>
+  </tr>
+</table>
+
 ## ゴール
 
 - Amazonで購入中の[4軸ロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)を制御
