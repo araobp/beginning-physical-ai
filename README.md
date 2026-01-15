@@ -59,6 +59,7 @@
 - SvelteKitでGemini Liveアプリをつくり、ロボットを音声で制御する
 - Unity上にロボットのデジタルツインをつくり、ロボットと動作を同期させる
 - STMicro製のI2C 8x8マトリクスの近接センサーと連携させる：簡易LiDAR（ピック、プレイスのx,y,z最適化）と安全管理
+- Panasonic製のI2C 8x8マトリクス赤外線アレイセンサーと連携させる：異常検知
 
 たぶん、これを一通りやれば、私、フィジカルAIの仕組みを一通り知っていると言えるようになる。12月に国際ロボット展で見てきた世界のミニチュア。GMO/Ugoとか、Epson、川崎重工、デンソー、安川、ファナックなどの世界。
 
@@ -77,6 +78,7 @@
 - Gemini Robotics-ERでUnity上の多軸ロボットを制御(Unity)　=> https://github.com/araobp/unity-robotics
 - Gemini Liveで博物館内展示の自動音声応対(SvelteKit, Godot) => https://github.com/araobp/godot-museum
 - Arduinoで赤外線アレイセンサー(異常検知に使える？) => https://github.com/araobp/arduino-infrared-array-sensor
+- ロボット巡回(Godotの3D機能が弱く中断) => https://github.com/araobp/airport
 
 ## 進め方
 
