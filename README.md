@@ -1,12 +1,34 @@
 # Beginning Physical AI
 
-まだ開始したばかりのプロジェクト(2026/1/12開始)。ブレインストーミングの状態だが、構想はまとまりつつある。2025年12月に国際ロボット展参加し、フィジカルAIへの興味が増大。
+まだ、始まったばかりのプロジェクト。
 
-ここ8年間にわたるIoT/画像処理/AI/デジタルツイン/AR/生成AI関連プロトタイピング活動(Minimum Viable Products)で獲得してきたスキルの集大成。MVPは使い捨てなので、全ての活動において、アジャイル、低予算、少人数で内製を貫いてきた。MVPとは、本物の動きを確認出来て、その先のイメージを掴むのが目的。MVPをたくさん作り続けると、世の中のIT面・物理面での仕組みが良く見えてくるのが良い。
+<img src="docs/4DoF_Robot_Kit.jpg" width="500px">
 
-マイルストーンごとにQiitaへ記事を投稿する。ICTエンジニアが小さな投資(1万円以下)でフィジカルAIの勉強を始めるための道筋を示したい。簡易LiDARや赤外線アレイセンサまでやると2万円を超えてしまうが。
+## 背景
 
-フルスタックで電子工作/Arduino/Python/HTML5/Unity/物理を網羅。小さなフィジカルAIシステムとしてまとめられるので、「フィジカルAIを始める」とう意味では良い構成。
+個人の自己研鑽として低予算（1万円以下）でフィジカルAIを始めるには、
+- Unityと物理エンジンでシミュレーションから始める、Unityを基盤とする
+- 4DoFロボットアームキットで電子工作から始める、Arduinoやラズパイを基盤とする
+
+の二つの始め方がある。両方で始めれば、より、フィジカルAIの仕組みを理解できる。
+
+このような始め方でも、AIの学習のところ（模倣学習、強化学習など）を除けば、網羅的に学習できる。Gemini Robotics-ERなど、学習済みAIを活用すれば、それなりの動作を期待できる。
+
+シミュレーションからの始め方については開発済み：https://github.com/araobp/unity-robotics
+
+ここでは、電子工作からの始め方を開発する。
+
+開発の節目ごとに、技術的な知見をQiitaにて公開していく予定。
+
+### つくりながら仕組みを理解するのが重要な理由：視野が広がる
+
+個々の仕組みを理解すると、フィジカルAIの現状が見えてくる：まだ、人間の指示にしたがい、移動するとか、物を運ぶとか、検査するとか、監視するとか、その程度しか出来ていない。それらは、これまでは、IoT+AIカメラ＋AR＋ドローン＋移動ロボット＋人手で解決しようとしていた部分。HAL 9000が宇宙船全体を制御するくらいの世界を考えたい。
+
+例えば、[Geminiに空港向けMCPサービス仕様を書かせてみた](https://github.com/araobp/airport/blob/main/docs/MCP_SPEC.md)が、これら、フィジカルAIを必要とする。OpenAIやSharpが考えているような新デバイスも必要。こういうの、大きなビジネスチャンスになると私は見ている。人型ロボットだけでなく、ITとOTの融合のあたりも巨大なビジネスチャンスではないか？だから、ICTエンジニアの私がフィジカルAIの勉強を始めている。
+
+そういう意味で、オフィス内で使われるAIエージェントとフィジカルAIを区別する必要もない。最初から一緒に考える。そういう意味で、MCPが重要な要素になるかもしれない。ただ、IoTとかOTのネットワークは、pubsubで通信するケースが多い。MCPやpubsubをAIエージェント間で機能させるため、LANとOTネットワークの統合が必要かも。
+
+仕事では、ここ2年間、AIエージェント作り続けた末に出てきた結論：実は、目の前の仕事を楽にすることではなく、生成AIやMCPで企業や社会におけるサイロ化をなくすことこそ巨大なビジネスチャンス。ROI最大化に向かうので経営者は歓迎。ただ、なかなか、そういう大きなビジョンで物事考えられる人は少ない。目的は、生成AIを使いこなすことではなく、ROI最大化のはず。このプロジェクトも、ROI最大化を意識した活動。
 
 ## Qiita記事投稿
 
@@ -27,6 +49,28 @@
 ```
 
 ## 部品・ツール
+
+### 4DoFロボットアーム
+
+Amazonで購入：[4DoFロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)
+
+組み立てマニュアル：
+- https://www.makerbuying.com/docs/4dofarm/over-view
+- https://www.youtube.com/watch?v=Q9JOKQaIR1w
+
+Google検索エンジンの言語設定を英語にして、"SNAM 1200 1300 1500 4 DOF ARM acrylic robot arm"で検索すると、たくさん出てくる。
+
+### NXP PCA9685 PWMコントローラ
+
+Amazonで購入：[KKHMF PCA9685 16チャンネル 12-ビット PWM Servo モーター ドライバー IIC モジュール](https://www.amazon.co.jp/dp/B078YRJ8D7)
+
+I2C address: 0x40 (A0 - A5 の端子を半田付けしてクローズすることでアドレス変更可能だが、今回はこのままで良し）。
+
+- ガイド：https://en.hwlibre.com/Complete-guide-to-the-PCA9685-controller-with-Arduino-and-more/
+- データシート：https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf
+- Arduinoライブラリ：https://github.com/adafruit/Adafruit-PWM-Servo-Driver-Library
+
+ArduinoのI2C通信では、Wire.begin();を実行すると、デジタルピン2と3（SDA, SCL）に内部プルアップ抵抗が自動的に有効になりますが、これはおよそ20kΩ〜50kΩと抵抗値が比較的高めなので、より確実な通信のためには、通常4.7kΩ〜10kΩ程度の外付けプルアップ抵抗をSDA/SCLラインに接続するのが推奨されます。Wire.begin()だけでは不十分な場合があるため、外部抵抗の追加を検討しましょう。
 
 ### Camera Calibration用のチェスボード
 
@@ -83,28 +127,12 @@
 
 ...
 
-## ゴール
-
-- Amazonで購入中の[4DoFロボット](https://www.amazon.co.jp/dp/B0CX8QZVFQ?ref=ppx_yo2ov_dt_b_fed_asin_title)をIKで制御
-- Arduino UNO R3をロボットコントローラとするが、４DoFロボットとの接続はAmazonで購入中の[この基板](https://www.amazon.co.jp/gp/product/B078YRJ8D7?ref=ppx_pt2_dt_b_prod_image)を経由。
-- Arduino UNO R3をUSBシリアル経由でラズパイと接続
-- ラズパイへ接続したUSBカメラ画像からロボットベースの平面座標を得る、マーカーで位置合わせする、Gemini Robotics-ER向け。
-- MCPがUSBバスみたいなものと言うなら、その通りにMCPを使ってみる：ラズパイ<-MCP->SvelteKit, ラズパイ<-MCP->Unity、これは昔でいうCORBAとかRMIだね。この辺、ICTエンジニアの強み。
-- SvelteKitでGemini Liveアプリをつくり、ロボットを音声で制御する
-- Unity上にロボットのデジタルツインをつくり、ロボットと動作を同期させる
-- STMicro製のI2C 8x8マトリクスの近接センサーと連携させる：簡易LiDAR（ピック、プレイスのx,y,z最適化）と安全管理
-- Panasonic製のI2C 8x8マトリクス赤外線アレイセンサーと連携させる：異常検知
-
-## My Arduino board
-
-[Arduino UNO R3](https://docs.arduino.cc/hardware/uno-rev3/)
-
 ## 関連する私のGitHubプロジェクト
 
 - Gemini Robotics-ERでUnity上の多軸ロボットを制御(Unity)　=> https://github.com/araobp/unity-robotics
 - Gemini Liveで博物館内展示の自動音声応対(SvelteKit, Godot) => https://github.com/araobp/godot-museum
 - Arduinoで赤外線アレイセンサー(異常検知に使える？) => https://github.com/araobp/arduino-infrared-array-sensor
-- ロボット巡回(Godotの3D機能が弱く中断) => https://github.com/araobp/airport
+- 空港内MCPやロボット巡回(Godotの3D機能が弱く中断、このプロジェクト終わったらUnity版で再開させたい) => https://github.com/araobp/airport
 
 ## 読みたい論文
 - [Gemini Robotics](https://arxiv.org/pdf/2503.20020)
