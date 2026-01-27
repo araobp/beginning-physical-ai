@@ -6,28 +6,30 @@
 /**
  * Physical parameters (Unit: mm)
  */
-const float L1 = 80.0;          
-const float L2 = 80.0;          
-const float L_OFF_J4_TCP = 64.0; 
-const float Z_OFF_J4_TCP = 8.0; 
-const float OFF_J1_J2 = 12.0;    
-const float BASE_H = 60.0;       
+const float L1 = 80.0;           // Length of arm segment 1
+const float L2 = 80.0;           // Length of arm segment 2
+const float L_OFF_J4_TCP = 64.0; // Horizontal offset from Joint 4 to Tool Center Point
+const float Z_OFF_J4_TCP = 8.0;  // Vertical offset from Joint 4 to Tool Center Point
+const float OFF_J1_J2 = 12.0;    // Offset between Joint 1 and Joint 2
+const float BASE_H = 60.0;       // Height of the base
 
-const int STEP_DELAY = 10;       
+const int STEP_DELAY = 10;       // Delay in ms between movement steps
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 #define SERVO_FREQ 50
 
+// Configuration structure stored in EEPROM
 struct Config {
-  int signature; 
-  int j_pulse[3][2];   
-  float j_angle[3][2]; 
-  int grip_open;       
-  int grip_close;      
-  int grip_speed_ms; 
+  int signature;       // Magic number to verify valid config
+  int j_pulse[3][2];   // Pulse widths for calibration points [joint][point]
+  float j_angle[3][2]; // Angles for calibration points [joint][point]
+  int grip_open;       // Pulse width for open gripper
+  int grip_close;      // Pulse width for closed gripper
+  int grip_speed_ms;   // Duration for gripper operation
 } conf;
 
-float curX = 150.0, curY = 0.0, curZ = 50.0; 
-int current_us[4] = {1500, 1500, 1500, 1500}; 
+float curX = 150.0, curY = 0.0, curZ = 50.0;  // Current logical coordinates
+int current_us[4] = {1500, 1500, 1500, 1500}; // Current pulse width for each channel
+int cmd_interval_ms = 0;                      // Delay between batched commands
 
 // Save current pulse position and config to EEPROM
 void saveConfig() {
@@ -49,6 +51,7 @@ int angleToUs(int ch, float angle) {
   return (int)(p0 + (angle - a0) * (p1 - p0) / (a1 - a0));
 }
 
+// Inverse Kinematics: Calculates joint angles (j1, j2, j3) for a given (x, y, z) coordinate
 bool calculateIK(float x, float y, float z, float &j1, float &j2, float &j3) {
   j1 = atan2(y, x) * 180.0 / PI;
   float r_total = sqrt(x*x + y*y);
@@ -67,6 +70,7 @@ bool calculateIK(float x, float y, float z, float &j1, float &j2, float &j3) {
   return true;
 }
 
+// Move the robot tool to target coordinates (tx, ty, tz) with interpolation
 void moveTo(float tx, float ty, float tz, float speed) {
   float sx = curX, sy = curY, sz = curZ;
   float dist = sqrt(sq(tx - sx) + sq(ty - sy) + sq(tz - sz));
@@ -86,10 +90,12 @@ void moveTo(float tx, float ty, float tz, float speed) {
   curX = tx; curY = ty; curZ = tz;
 }
 
+// Parse and execute a single command string
 void executeCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
 
+  // Coordinate movement command
   if (cmd.startsWith("move")) {
     float tx = curX, ty = curY, tz = curZ, speed = 50.0;
     if(cmd.indexOf("x=") != -1) tx = cmd.substring(cmd.indexOf("x=")+2).toFloat();
@@ -98,6 +104,7 @@ void executeCommand(String cmd) {
     if(cmd.indexOf("s=") != -1) speed = cmd.substring(cmd.indexOf("s=")+2).toFloat();
     moveTo(tx, ty, tz, speed);
   } 
+  // Gripper calibration command
   else if (cmd.startsWith("calibg")) {
     if (cmd.indexOf("open") != -1) {
       conf.grip_open = current_us[3];
@@ -109,6 +116,7 @@ void executeCommand(String cmd) {
       Serial.println(F("Usage: calibg <open|close>"));
     }
   }
+  // Joint calibration command (Inverse Kinematics reference points)
   else if (cmd.startsWith("calib")) {
     int ptIdx = cmd.substring(5,6).toInt();
     float tx=0, ty=0, tz=0;
@@ -123,6 +131,7 @@ void executeCommand(String cmd) {
       Serial.print(F("Point ")); Serial.print(ptIdx); Serial.println(F(" IK registered."));
     }
   }
+  // Gripper operation command
   else if (cmd.startsWith("grip")) {
     int start_us = current_us[3];
     int target_us = (cmd.indexOf("open") != -1) ? conf.grip_open : conf.grip_close;
@@ -132,12 +141,27 @@ void executeCommand(String cmd) {
       delay(STEP_DELAY);
     }
   }
+  // Delay command
   else if (cmd.startsWith("delay")) {
     int t = 1;
-    if(cmd.indexOf("t=") != -1) t = cmd.substring(cmd.indexOf("t=")+2).toInt();
+    if(cmd.indexOf("t=") != -1) {
+      t = cmd.substring(cmd.indexOf("t=")+2).toInt();
+    } else {
+      String s = cmd.substring(5);
+      s.trim();
+      if (s.length() > 0) t = s.toInt();
+    }
     delay(t);
   }
+  // Set command interval command
+  else if (cmd.startsWith("cmdint")) {
+    int val = 0;
+    if (cmd.indexOf('=') != -1) val = cmd.substring(cmd.indexOf('=')+1).toInt();
+    else val = cmd.substring(6).toInt();
+    cmd_interval_ms = val;
+  }
   else if (cmd.startsWith("c")) { 
+    // Direct channel control (e.g., c0=1500)
     int eqIdx = cmd.indexOf('=');
     if (eqIdx != -1) {
       int ch = cmd.substring(1, eqIdx).toInt();
@@ -145,10 +169,12 @@ void executeCommand(String cmd) {
       moveServo(ch, us);
     }
   }
+  // Save configuration to EEPROM
   else if (cmd == "save") { 
     saveConfig(); 
     Serial.println(F("Config Saved to EEPROM.")); 
   }
+  // Dump current configuration and state
   else if (cmd == "dump") {
     Serial.println(F("\n--- CONFIG DUMP ---"));
     for(int i=0; i<3; i++) {
@@ -167,6 +193,7 @@ void executeCommand(String cmd) {
     Serial.print(F(" Z=")); Serial.println(curZ);
     Serial.println(F("-------------------\n"));
   }
+  // Help command
   else if (cmd == "help") {
     Serial.println(F("\n--- COMMAND HELP ---"));
     Serial.println(F("move x=.. y=.. z=.. s=.. : Coordinate move"));
@@ -174,7 +201,8 @@ void executeCommand(String cmd) {
     Serial.println(F("calib<0|1> x=.. y=.. z=..: IK calibration"));
     Serial.println(F("calibg <open|close>      : Gripper calibration"));
     Serial.println(F("grip <open|close>        : Gripper move"));
-    Serial.println(F("delay t=<ms>             : Wait for t ms"));
+    Serial.println(F("delay <ms>               : Wait for ms"));
+    Serial.println(F("cmdint <ms>              : Set command interval"));
     Serial.println(F("save                     : Write to EEPROM"));
     Serial.println(F("dump                     : Show current status"));
     Serial.println(F("help                     : This message"));
@@ -185,11 +213,13 @@ void executeCommand(String cmd) {
   }
 }
 
+// Setup function: Initialize Serial, PWM, and load/init config
 void setup() {
   Serial.begin(9600);
   pwm.begin();
   pwm.setPWMFreq(SERVO_FREQ);
 
+  // Load config from EEPROM or initialize defaults if signature mismatch
   EEPROM.get(0, conf);
   if (conf.signature != 0xABCD) {
     conf.signature = 0xABCD;
@@ -218,6 +248,7 @@ void setup() {
   Serial.println(F("--- ROBOT SYSTEM v3.6 Ready ---"));
 }
 
+// Main loop: Read and process serial commands
 void loop() {
   if (Serial.available() > 0) {
     String input = Serial.readStringUntil('\n');
@@ -226,10 +257,11 @@ void loop() {
     int delimiterIdx = input.indexOf(';');
     while (delimiterIdx != -1) {
       executeCommand(input.substring(startIdx, delimiterIdx));
+      if (cmd_interval_ms > 0) delay(cmd_interval_ms);
       startIdx = delimiterIdx + 1;
       delimiterIdx = input.indexOf(';', startIdx);
     }
     executeCommand(input.substring(startIdx));
-    Serial.println(F("OK"));
+    Serial.println(("%"));
   }
 }

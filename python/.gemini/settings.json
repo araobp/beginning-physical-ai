@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "robot": {
+      "httpUrl": "http://localhost:8888/mcp"
+    }
+  }
+}
