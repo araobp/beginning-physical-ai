@@ -7,8 +7,9 @@
 1. [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://qiita.com/araobp/items/5ac9b141c64e4967b61e)
 2. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その１：ロボット準備編](https://qiita.com/araobp/items/b34a5c64f281f09d3d89)
 3. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その２：ロボットコントローラ編](https://qiita.com/araobp/items/0776cc494c6963fc61ad)
-4. ...
-
+4. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その３：MCPサーバ編](https://qiita.com/araobp/items/d5ba84f84527ebcf72a1)
+5. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その４：ロボットの目編](https://qiita.com/araobp/items/510b497c3415f7f42f76)
+6. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その５：MCPクライアント編](https://qiita.com/araobp/items/f70e27586f46bbd7ba45)
 
 ## 部品・ツール
 
