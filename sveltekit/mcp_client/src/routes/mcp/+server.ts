@@ -70,13 +70,24 @@ export const POST: RequestHandler = async ({ request }) => {
 			// 1. Get a clean image from the robot (without axis labels)
 			const imgResult = await mcp.callTool({
 				name: 'get_live_image',
-				arguments: { visualize_labels: false }
+				arguments: { visualize_axes: true }
 			});
 
 			// Parse the result from get_live_image
 			// @ts-ignore
+			if (imgResult.isError) {
+				// @ts-ignore
+				return new Response(JSON.stringify({ error: imgResult.content[0]?.text || 'Unknown error from get_live_image' }), { status: 500 });
+			}
+
+			// @ts-ignore
 			const contentText = imgResult.content[0].text;
-			const parsedImg = JSON.parse(contentText);
+			let parsedImg;
+			try {
+				parsedImg = JSON.parse(contentText);
+			} catch (e) {
+				return new Response(JSON.stringify({ error: `Invalid JSON from get_live_image: ${contentText}` }), { status: 500 });
+			}
 			const base64Image = parsedImg.image_jpeg_base64;
 
 			// 2. Call Gemini API
