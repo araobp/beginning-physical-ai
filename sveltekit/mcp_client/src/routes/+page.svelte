@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, afterUpdate } from 'svelte';
+  import { onMount } from 'svelte';
 
   // For TensorFlow.js
 
@@ -25,20 +25,6 @@
   let targetWorldCoords = $state<{ x: number, y: number } | null>(null);
   let detectedObjects = $state<any[]>([]);
   let visualizeAxes = $state(true);
-
-  // Chat / Agent State
-  let chatMessages = $state<{ role: 'user' | 'assistant' | 'system' | 'error' | 'tool', content: string, details?: any }[]>([]);
-  let chatInput = $state("");
-  let agentRunning = $state(false);
-  let agentStartTime = $state(0);
-  let agentElapsedTime = $state("0.0");
-  let agentTimer: any = null;
-  let abortController: AbortController | null = null;
-  let apiKey = $state("");
-  let sessionId = $state<string | null>(null);
-  let chatModel = $state("gemini-2.5-flash");
-  let chatContainer: HTMLElement;
-  
   
   const boxColors = [
     '#FF3838', // Red
@@ -59,216 +45,21 @@
     return (yiq >= 128) ? 'black' : 'white';
   }
 
-  afterUpdate(() => {
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-    }
-  });
-
-  async function initializeMCP() {
-    if (!sessionId) return;
-    try {
-      // 1. Initialize
-      const initRes = await fetch(`/mcp?session_id=${sessionId}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "initialize",
-          params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {
-                roots: { listChanged: true },
-                sampling: {}
-            },
-            clientInfo: {
-              name: "SvelteClient",
-              version: "1.0.0"
-            }
-          },
-          id: 0
-        }),
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const initData = await initRes.json();
-      if (initData.error) {
-        console.error("MCP Initialization failed:", initData.error);
-        return;
-      }
-
-      // 2. Initialized Notification
-      await fetch(`/mcp?session_id=${sessionId}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "notifications/initialized"
-        }),
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      // 3. Load Tools
-      await loadTools();
-    } catch (e) {
-      console.error("MCP Setup error:", e);
-    }
-  }
-
   async function loadTools() {
-    if (!sessionId) return;
     try {
-      const res = await fetch(`/mcp?session_id=${sessionId}`, {
+      const res = await fetch('/mcp', {
         method: 'POST',
-        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+        body: JSON.stringify({ type: 'list_tools' }),
         headers: { 'Content-Type': 'application/json' }
       });
       const data = await res.json();
-      if (data.result && data.result.tools) {
-        tools = data.result.tools as Tool[];
+      if (data.tools) {
+        tools = data.tools as Tool[];
       } else {
         error = data.error || "Failed to load tools";
       }
     } catch (e: any) {
       error = e.message;
-    }
-  }
-
-  function startTimer() {
-    agentStartTime = Date.now();
-    agentElapsedTime = "0.0";
-    agentTimer = setInterval(() => {
-      const elapsed = (Date.now() - agentStartTime) / 1000;
-      agentElapsedTime = elapsed.toFixed(1);
-    }, 100);
-  }
-
-  function stopTimer() {
-    if (agentTimer) clearInterval(agentTimer);
-    agentTimer = null;
-  }
-
-  async function executeToolByName(name: string, args: any, signal?: AbortSignal): Promise<string> {
-      if (!sessionId) return "Error: No MCP session";
-      try {
-        const res = await fetch(`/mcp?session_id=${sessionId}`, {
-            method: 'POST',
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                method: "tools/call",
-                params: { name: name, arguments: args },
-                id: 7
-            }),
-            headers: { 'Content-Type': 'application/json' },
-            signal
-        });
-        const result = await res.json();
-        if (result.result && result.result.content && Array.isArray(result.result.content)) {
-            return result.result.content.map((c: any) => c.text || '').join('\n');
-        }
-        return JSON.stringify(result);
-      } catch (e: any) {
-        if (e.name === 'AbortError') throw e;
-        return `Error: ${e.message}`;
-      }
-  }
-
-  async function askGemini(prompt: string, model: string, signal?: AbortSignal): Promise<string> {
-    try {
-      const res = await fetch('/api/gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, model, apiKey }),
-        signal
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `API Error: ${res.status} ${res.statusText}`);
-      }
-      const data = await res.json();
-      return data.text || (typeof data.content === 'string' ? data.content : JSON.stringify(data));
-    } catch (e: any) {
-      if (e.name === 'AbortError') throw e;
-      throw new Error(`LLM Call Failed: ${e.message}`);
-    }
-  }
-
-  function cleanObservation(obs: string): string {
-    return obs.replace(/"image_jpeg_base64":\s*"[^"]+"/g, '"image_jpeg_base64": "<image_data_removed>"');
-  }
-
-  async function runReACTAgent(goal: string, signal: AbortSignal) {
-    const maxSteps = 10;
-    let currentStep = 0;
-    
-    const toolDefs = tools.map(t => `${t.name}: ${t.description || ''}`).join('\n');
-    let history = `You are an AI assistant. Tools: ${toolDefs}.
-Format: Thought: ... Action: ... Action Input: ... Observation: ... Final Answer: ...
-Question: ${goal}`;
-
-    while (currentStep < maxSteps) {
-        if (signal.aborted) throw new Error('Aborted');
-
-        let response = await askGemini(history, chatModel, signal);
-        
-        const thoughtMatch = response.match(/Thought:\s*(.*?)(?=\s*Action:|\s*Final Answer:|$)/s);
-        if (thoughtMatch && thoughtMatch[1].trim()) {
-            chatMessages = [...chatMessages, { role: 'assistant', content: `Thinking: ${thoughtMatch[1].trim()}` }];
-        }
-
-        if (response.includes("Final Answer:")) {
-            const finalAnswer = response.split("Final Answer:")[1].trim();
-            chatMessages = [...chatMessages, { role: 'assistant', content: finalAnswer }];
-            return;
-        }
-
-        const actionMatch = response.match(/Action:\s*([a-zA-Z0-9_]+)/);
-        if (actionMatch) {
-            const actionName = actionMatch[1].trim();
-            const inputMatch = response.match(/Action Input:\s*(\{.*?\})/s);
-            let actionArgs = {};
-            if (inputMatch) {
-                try { actionArgs = JSON.parse(inputMatch[1]); } catch (e) {}
-            }
-            const observation = await executeToolByName(actionName, actionArgs, signal);
-            chatMessages = [...chatMessages, { 
-                role: 'tool', 
-                content: `Executed: ${actionName}`,
-                details: {
-                    action: actionName,
-                    input: actionArgs,
-                    output: observation
-                }
-            }];
-            const cleanedObservation = cleanObservation(observation);
-            history += `\n${response}\nObservation: ${cleanedObservation}\n`;
-        } else {
-            chatMessages = [...chatMessages, { role: 'assistant', content: response }];
-            return;
-        }
-        currentStep++;
-    }
-  }
-
-  async function handleChatSubmit() {
-    if (!chatInput.trim() || agentRunning) return;
-    const text = chatInput;
-    chatInput = "";
-    chatMessages = [...chatMessages, { role: 'user', content: text }];
-    
-    agentRunning = true;
-    startTimer();
-    abortController = new AbortController();
-
-    try {
-        await runReACTAgent(text, abortController.signal);
-    } catch (e: any) {
-        if (e.message === 'Aborted' || e.name === 'AbortError') {
-            chatMessages = [...chatMessages, { role: 'system', content: 'Cancelled.' }];
-        } else {
-            chatMessages = [...chatMessages, { role: 'error', content: e.message }];
-        }
-    } finally {
-        agentRunning = false;
-        stopTimer();
-        abortController = null;
     }
   }
 
@@ -291,18 +82,17 @@ Question: ${goal}`;
   }
 
   async function executeTool() {
-    if (!selectedTool || !sessionId) return;
+    if (!selectedTool) return;
     isExecuting = true;
     executionResult = null;
     try {
       console.log(`Executing tool: ${selectedTool.name}`, toolArgs);
-      const res = await fetch(`/mcp?session_id=${sessionId}`, {
+      const res = await fetch('/mcp', {
         method: 'POST',
         body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: { name: selectedTool.name, arguments: toolArgs },
-          id: 2
+          type: 'call_tool',
+          name: selectedTool.name,
+          arguments: toolArgs
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -311,8 +101,8 @@ Question: ${goal}`;
       let text = "";
       let image = undefined;
 
-      if (result.result && result.result.content && Array.isArray(result.result.content)) {
-        for (const content of result.result.content) {
+      if (result.content && Array.isArray(result.content)) {
+        for (const content of result.content) {
           if (content.type === 'text') {
             try {
               const parsed = JSON.parse(content.text);
@@ -341,27 +131,25 @@ Question: ${goal}`;
   }
 
   async function captureImage() {
-    if (!sessionId) return;
     capturing = true;
     targetMarker = null;
     targetImageCoords = null;
     targetWorldCoords = null;
     detectedObjects = [];
     try {
-      const res = await fetch(`/mcp?session_id=${sessionId}`, {
+      const res = await fetch('/mcp', {
         method: 'POST',
         body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: { name: 'get_live_image', arguments: { visualize_axes: visualizeAxes } },
-          id: 3
+          type: 'call_tool',
+          name: 'get_live_image',
+          arguments: { visualize_axes: visualizeAxes }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
       const result = await res.json();
       
-      if (result.result && result.result.content && Array.isArray(result.result.content)) {
-        for (const content of result.result.content) {
+      if (result.content && Array.isArray(result.content)) {
+        for (const content of result.content) {
           if (content.type === 'text') {
             try {
               const parsed = JSON.parse(content.text);
@@ -397,7 +185,6 @@ Question: ${goal}`;
   }
 
   async function detectObjectsGemini() {
-    if (!sessionId) return;
     detecting = true;
     targetMarker = null;
     targetImageCoords = null;
@@ -405,13 +192,12 @@ Question: ${goal}`;
     detectedObjects = [];
 
     try {
-      const res = await fetch(`/mcp?session_id=${sessionId}`, {
+      const res = await fetch('/mcp', {
         method: 'POST',
         body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: { name: 'detect_objects', arguments: { model_name: detectionModel } },
-          id: 4
+          type: 'call_tool',
+          name: 'detect_objects',
+          arguments: { model_name: detectionModel }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -467,7 +253,7 @@ Question: ${goal}`;
 
   async function transformObjectCoords(index: number) {
     const obj = detectedObjects[index];
-    if (!obj || !cameraImage || !sessionId) return;
+    if (!obj || !cameraImage) return;
 
     obj.isTransforming = true;
     detectedObjects = [...detectedObjects];
@@ -486,20 +272,19 @@ Question: ${goal}`;
         
         obj.imageCoords = { u, v };
 
-        const res = await fetch(`/mcp?session_id=${sessionId}`, {
+        const res = await fetch('/mcp', {
             method: 'POST',
             body: JSON.stringify({
-                jsonrpc: "2.0",
-                method: "tools/call",
-                params: { name: 'convert_image_coords_to_world', arguments: { u, v } },
-                id: 5
+                type: 'call_tool',
+                name: 'convert_image_coords_to_world',
+                arguments: { u, v }
             }),
             headers: { 'Content-Type': 'application/json' }
         });
         const result = await res.json();
 
-        if (result.result && result.result.content && Array.isArray(result.result.content)) {
-            for (const content of result.result.content) {
+        if (result.content && Array.isArray(result.content)) {
+            for (const content of result.content) {
                 if (content.type === 'text') {
                     try {
                         const coords = JSON.parse(content.text);
@@ -525,22 +310,20 @@ Question: ${goal}`;
   }
 
   async function convertImageCoordsToWorld(u: number, v: number) {
-    if (!sessionId) return;
     try {
-      const res = await fetch(`/mcp?session_id=${sessionId}`, {
+      const res = await fetch('/mcp', {
         method: 'POST',
         body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: { name: 'convert_image_coords_to_world', arguments: { u, v } },
-          id: 6
+          type: 'call_tool',
+          name: 'convert_image_coords_to_world',
+          arguments: { u, v }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
       const result = await res.json();
       
-      if (result.result && result.result.content && Array.isArray(result.result.content)) {
-        for (const content of result.result.content) {
+      if (result.content && Array.isArray(result.content)) {
+        for (const content of result.content) {
           if (content.type === 'text') {
             try {
               const coords = JSON.parse(content.text);
@@ -590,13 +373,9 @@ Question: ${goal}`;
 
   onMount(() => {
     const sse = new EventSource('/mcp');
-    sse.addEventListener('endpoint', (e) => {
-        const url = new URL(e.data, window.location.href);
-        sessionId = url.searchParams.get('session_id');
-        console.log("MCP Session ID:", sessionId);
-        initializeMCP();
-    });
-    sse.onmessage = (e) => console.log("SSE Message:", e.data);
+    sse.onmessage = (e) => console.log("SSE:", e.data);
+    
+    loadTools();
 
     // Load TensorFlow.js and then COCO-SSD model to ensure correct dependency order
     const tfScript = document.createElement('script');
@@ -784,56 +563,7 @@ Question: ${goal}`;
         </div>
       </div>
       <div class="tab-pane fade" id="chat-tab-pane" role="tabpanel" aria-labelledby="chat-tab" tabindex="0">
-        <div class="d-flex flex-column" style="height: 75vh;">
-          <!-- Output Pane -->
-          <div bind:this={chatContainer} class="flex-grow-1 overflow-auto p-3 bg-light border rounded mb-3 d-flex flex-column gap-2">
-            {#each chatMessages as msg}
-              {#if msg.role === 'tool'}
-                <div class="p-2 rounded shadow-sm" style="max-width: 90%; align-self: center; background-color: #f0f0f0; font-size: 0.85em; width: 100%;">
-                   <details>
-                      <summary style="cursor: pointer; color: #555;">Tool: <strong>{msg.details?.action}</strong></summary>
-                      <div class="mt-2 ps-3 border-start border-3">
-                          <div class="mb-1"><strong>Input:</strong> <span class="text-muted">{JSON.stringify(msg.details?.input)}</span></div>
-                          <div><strong>Output:</strong></div>
-                          <pre class="bg-white p-2 border rounded mt-1 mb-0" style="max-height: 150px; overflow: auto; font-size: 0.8em;">{msg.details?.output}</pre>
-                      </div>
-                   </details>
-                </div>
-              {:else}
-                {@const isThinking = msg.role === 'assistant' && msg.content.startsWith('Thinking:')}
-                <div class="p-2 rounded shadow-sm" 
-                     style="max-width: 80%; 
-                            align-self: {msg.role === 'user' ? 'flex-end' : (msg.role === 'system' || msg.role === 'error' ? 'center' : 'flex-start')};
-                            background-color: {msg.role === 'user' ? '#dcf8c6' : (msg.role === 'error' ? '#ffcccc' : (isThinking ? '#f8f9fa' : '#fff'))};
-                            border: {msg.role === 'assistant' ? '1px solid #ddd' : 'none'};
-                            font-style: {isThinking ? 'italic' : 'normal'};
-                            color: {isThinking ? '#6c757d' : 'inherit'};">
-                  <div style="font-size: 0.75em; color: #666; margin-bottom: 2px;">{msg.role}</div>
-                  <div style="white-space: pre-wrap;">{msg.content}</div>
-                </div>
-              {/if}
-            {/each}
-
-            <!-- Dynamic Controls -->
-            {#if agentRunning}
-              <div class="d-flex align-items-center justify-content-center gap-3 mt-2">
-                <button class="btn btn-danger btn-sm" onclick={() => abortController?.abort()}>キャンセル</button>
-                <span class="fw-bold text-primary">{agentElapsedTime}s</span>
-              </div>
-            {/if}
-          </div>
-
-          <!-- Input Pane -->
-          <div class="input-group">
-            <textarea class="form-control" rows="1" bind:value={chatInput} placeholder="Type a message..." onkeydown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-                e.preventDefault();
-                handleChatSubmit();
-              }
-            }}></textarea>
-            <button class="btn btn-primary" onclick={handleChatSubmit} disabled={agentRunning}>送信</button>
-          </div>
-        </div>
+        <p>This is the content for the Chat tab.</p>
       </div>
       <div class="tab-pane fade" id="live-tab-pane" role="tabpanel" aria-labelledby="live-tab" tabindex="0">
         <p>This is the content for the Live tab.</p>
@@ -891,28 +621,6 @@ Question: ${goal}`;
           <button type="button" class="btn btn-primary" onclick={executeTool} disabled={isExecuting}>
             {isExecuting ? 'Running...' : 'Execute'}
           </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Settings Modal -->
-  <div class="modal fade" id="settingsModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title">Settings</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-        </div>
-        <div class="modal-body">
-          <div class="mb-3">
-            <label for="apiKeyInput" class="form-label">Gemini API Key</label>
-            <input type="password" class="form-control" id="apiKeyInput" bind:value={apiKey} placeholder="Enter your API Key">
-            <div class="form-text">Leave blank if configured on server via GEMINI_API_KEY.</div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         </div>
       </div>
     </div>

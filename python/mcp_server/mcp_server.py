@@ -8,39 +8,15 @@
 """
 from fastmcp import FastMCP
 import serial
-import serial.tools.list_ports
 import time
 import json
 import base64
 import cv2
-import re
 from vision_system import VisionSystem
 
 # --- 基本設定 ---
 # ロボットアーム（Arduino）が接続されているシリアルポート
-def detect_serial_port():
-    """
-    USBシリアルポートを自動検出し、番号が最小のものを返します。
-    """
-    ports = [p.device for p in serial.tools.list_ports.comports()]
-    # USBシリアルらしいデバイスをフィルタリング (Mac/Linux/Windows)
-    # Mac: cu.usbmodem..., Linux: ttyACM.../ttyUSB..., Windows: COM...
-    usb_ports = [p for p in ports if any(k in p for k in ['usbmodem', 'ttyACM', 'ttyUSB', 'COM'])]
-    
-    if not usb_ports:
-        fallback_port = '/dev/cu.usbmodem101'
-        print(f"Warning: No USB serial ports detected. Using default fallback: {fallback_port}")
-        return fallback_port
-    
-    # 自然順ソート (例: COM3 < COM10)
-    def natural_keys(text):
-        return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
-    
-    usb_ports.sort(key=natural_keys)
-    print(f"Auto-detected serial port: {usb_ports[0]} (from {usb_ports})")
-    return usb_ports[0]
-
-SERIAL_PORT = detect_serial_port()
+SERIAL_PORT = '/dev/cu.usbmodem101'
 # シリアル通信のボーレート
 BAUD_RATE = 9600
 # コマンド応答のタイムアウト（秒）
