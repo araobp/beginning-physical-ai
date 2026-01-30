@@ -2,6 +2,7 @@ import type { RequestHandler } from './$types';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
 const EventSource = require('eventsource');
@@ -10,6 +11,7 @@ const EventSource = require('eventsource');
 global.EventSource = EventSource;
 
 let client: Client | null = null;
+const imageCache = new Map<string, string>();
 
 async function getClient() {
 	if (client) return client;
@@ -120,31 +122,103 @@ export const POST: RequestHandler = async ({ request }) => {
 			return new Response(JSON.stringify(result));
 		}
 
-		if (body.type === 'chat') {
+		if (body.type === 'chat') { // Modified to implement ReAct loop
 			const modelName = body.model || 'gemini-2.5-flash';
 			const apiKey = process.env.GEMINI_API_KEY;
 			if (!apiKey) {
 				return new Response(JSON.stringify({ error: 'GEMINI_API_KEY environment variable is not set on the server.' }), { status: 500 });
 			}
 
-			const messages = body.messages || [];
-			const contents = messages.map((msg: any) => ({
-				role: msg.role === 'assistant' ? 'model' : 'user',
-				parts: [{ text: msg.text }]
-			}));
+			// 1. Get available tools from MCP server
+			const toolList = await mcp.listTools();
+			const geminiTools = [{
+				functionDeclarations: toolList.tools.map(t => ({
+					name: t.name,
+					description: t.description, // Corrected property name
+					parameters: t.inputSchema,
+				}))
+			}];
 
-			const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ contents })
+			// 2. Prepare message history for Gemini
+			const capturedImages: { id: string, data: string }[] = [];
+			const messages = body.messages || [];
+			
+			// Find the last image ID in the history to send only the latest image context
+			let lastImageId: string | undefined;
+			for (let i = messages.length - 1; i >= 0; i--) {
+				if (messages[i].imageId) {
+					lastImageId = messages[i].imageId;
+					break;
+				}
+			}
+
+			const contents = messages.map((msg: any) => {
+				const parts: any[] = [{ text: msg.text }];
+				if (msg.imageId && msg.imageId === lastImageId && imageCache.has(msg.imageId)) {
+					parts.push({ inline_data: { mime_type: "image/jpeg", data: imageCache.get(msg.imageId) } });
+				}
+				return {
+					role: msg.role === 'assistant' ? 'model' : 'user',
+					parts
+				};
 			});
 
-			const geminiData = await geminiRes.json();
-			if (geminiData.error) {
-				return new Response(JSON.stringify({ error: geminiData.error.message }), { status: 500 });
+			// 3. ReAct loop
+			for (let i = 0; i < 5; i++) { // Limit to 5 turns to prevent infinite loops
+				const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						contents,
+						tools: geminiTools
+					})
+				});
+
+				const geminiData = await geminiRes.json();
+
+				if (geminiData.error || !geminiData.candidates || geminiData.candidates.length === 0) {
+					console.error("Gemini API Error:", geminiData.error || "No candidates returned");
+					return new Response(JSON.stringify({ error: geminiData.error?.message || "Error calling Gemini API" }), { status: 500 });
+				}
+
+				const candidate = geminiData.candidates[0];
+				const part = candidate.content.parts[0];
+
+				if (part.text) {
+					return new Response(JSON.stringify({ text: part.text, images: capturedImages }));
+				}
+
+				if (part.functionCall) {
+					const { name, args } = part.functionCall;
+					console.log(`[ReAct] Gemini wants to call tool: ${name} with args:`, args);
+
+					contents.push({ role: 'model', parts: [part] });
+					const toolResult = await mcp.callTool({ name, arguments: args });
+					console.log(`[ReAct] Tool ${name} result:`, toolResult);
+
+					// Capture images from tool result
+					if (toolResult.content && Array.isArray(toolResult.content)) {
+						for (const content of toolResult.content) {
+							if (content.type === 'text') {
+								try {
+									const parsed = JSON.parse(content.text);
+									if (parsed.image_jpeg_base64) {
+										const imageId = randomUUID();
+										imageCache.set(imageId, parsed.image_jpeg_base64);
+										capturedImages.push({ id: imageId, data: `data:image/jpeg;base64,${parsed.image_jpeg_base64}` });
+									}
+								} catch (e) {}
+							}
+						}
+					}
+
+					contents.push({ role: 'tool', parts: [{ functionResponse: { name, response: toolResult } }] });
+				} else {
+					return new Response(JSON.stringify({ text: `Unexpected response from model: ${JSON.stringify(candidate.content)}` }));
+				}
 			}
-			const responseText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-			return new Response(JSON.stringify({ text: responseText }));
+
+			return new Response(JSON.stringify({ error: "Model did not produce a text response after 5 tool calls." }), { status: 500 });
 		}
 
 		return new Response(JSON.stringify({ error: 'Invalid message type' }), { status: 400 });

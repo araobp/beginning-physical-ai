@@ -27,7 +27,14 @@
   let visualizeAxes = $state(true);
   
   let chatInput = $state("");
-  let chatMessages = $state([
+  
+  interface ChatMessage {
+    role: string;
+    text: string;
+    image?: string;
+    imageId?: string;
+  }
+  let chatMessages = $state<ChatMessage[]>([
     { role: 'assistant', text: 'こんにちは！何かお手伝いできることはありますか？' },
     { role: 'user', text: 'テストメッセージ' },
   ]);
@@ -394,7 +401,11 @@
         method: 'POST',
         body: JSON.stringify({
           type: 'chat',
-          messages: chatMessages,
+          messages: chatMessages.map(msg => ({
+            role: msg.role,
+            text: msg.text,
+            imageId: msg.imageId // Send ID instead of full image data
+          })),
           model: chatModel
         }),
         headers: { 'Content-Type': 'application/json' }
@@ -413,6 +424,12 @@
         responseText = JSON.stringify(result);
       }
       
+      if (result.images && Array.isArray(result.images)) {
+        for (const img of result.images) {
+          chatMessages = [...chatMessages, { role: 'assistant', text: '', image: img.data, imageId: img.id }];
+        }
+      }
+
       chatMessages = [...chatMessages, { role: 'assistant', text: responseText }];
     } catch (e: any) {
       chatMessages = [...chatMessages, { role: 'assistant', text: `Error: ${e.message}` }];
@@ -645,6 +662,9 @@
                   </div>
                 {/if}
                 <div class="p-2 rounded-3 shadow-sm" style="max-width: 70%; background-color: {msg.role === 'user' ? '#98e165' : 'white'}; position: relative;">
+                  {#if msg.image}
+                    <img src={msg.image} alt="Captured" class="img-fluid rounded mb-2" />
+                  {/if}
                   <div style="white-space: pre-wrap;">{msg.text}</div>
                 </div>
               </div>
