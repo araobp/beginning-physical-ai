@@ -26,6 +26,16 @@
   let detectedObjects = $state<any[]>([]);
   let visualizeAxes = $state(true);
   
+  let chatInput = $state("");
+  let chatMessages = $state([
+    { role: 'assistant', text: 'こんにちは！何かお手伝いできることはありますか？' },
+    { role: 'user', text: 'テストメッセージ' },
+  ]);
+  let chatModel = $state("gemini-2.5-flash");
+  let isChatting = $state(false);
+  let chatContainer = $state<HTMLElement | null>(null);
+  let chatInputElement = $state<HTMLInputElement | null>(null);
+  
   const boxColors = [
     '#FF3838', // Red
     '#18FFFF', // Cyan
@@ -371,6 +381,59 @@
     convertImageCoordsToWorld(u, v);
   }
 
+  async function sendChatMessage() {
+    if (!chatInput.trim() || isChatting) return;
+
+    const userText = chatInput;
+    chatInput = "";
+    chatMessages = [...chatMessages, { role: 'user', text: userText }];
+    isChatting = true;
+
+    try {
+      const res = await fetch('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'chat',
+          messages: chatMessages,
+          model: chatModel
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      const result = await res.json();
+      let responseText = "";
+      
+      if (result.error) {
+        responseText = `Error: ${result.error}`;
+      } else if (result.text) {
+        responseText = result.text;
+      } else if (result.content && Array.isArray(result.content)) {
+        responseText = result.content.map((c: any) => c.text).join("");
+      } else {
+        responseText = JSON.stringify(result);
+      }
+      
+      chatMessages = [...chatMessages, { role: 'assistant', text: responseText }];
+    } catch (e: any) {
+      chatMessages = [...chatMessages, { role: 'assistant', text: `Error: ${e.message}` }];
+    } finally {
+      isChatting = false;
+    }
+  }
+
+  $effect(() => {
+    chatMessages;
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  });
+
+  $effect(() => {
+    if (!isChatting) {
+      chatInputElement?.focus();
+    }
+  });
+
   onMount(() => {
     const sse = new EventSource('/mcp');
     sse.onmessage = (e) => console.log("SSE:", e.data);
@@ -563,7 +626,43 @@
         </div>
       </div>
       <div class="tab-pane fade" id="chat-tab-pane" role="tabpanel" aria-labelledby="chat-tab" tabindex="0">
-        <p>This is the content for the Chat tab.</p>
+        <div class="d-flex flex-column mx-auto border" style="height: 70vh; max-width: 800px;">
+          <div class="p-2 bg-light border-bottom d-flex justify-content-end align-items-center gap-2">
+            <select class="form-select w-auto" bind:value={chatModel}>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gemini-2.0-flash-thinking-exp-01-21">gemini-2.0-flash-thinking-exp-01-21</option>
+              <option value="gemini-exp-1206">gemini-exp-1206</option>
+            </select>
+          </div>
+          <div class="flex-grow-1 overflow-auto p-3" style="background-color: #7297c4;" bind:this={chatContainer}>
+            {#each chatMessages as msg}
+              <div class="d-flex mb-3 {msg.role === 'user' ? 'justify-content-end' : 'justify-content-start'}">
+                {#if msg.role === 'assistant'}
+                  <div class="me-2 d-flex flex-column align-items-center">
+                    <div class="rounded-circle bg-white d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
+                      <span style="font-size: 24px;">🤖</span>
+                    </div>
+                  </div>
+                {/if}
+                <div class="p-2 rounded-3 shadow-sm" style="max-width: 70%; background-color: {msg.role === 'user' ? '#98e165' : 'white'}; position: relative;">
+                  <div style="white-space: pre-wrap;">{msg.text}</div>
+                </div>
+              </div>
+            {/each}
+          </div>
+          <div class="p-2 bg-light border-top">
+            <div class="input-group">
+              <input type="text" class="form-control" placeholder="メッセージを入力" bind:value={chatInput} bind:this={chatInputElement} onkeydown={(e) => {
+                if (e.key === 'Enter' && !e.isComposing) {
+                  sendChatMessage();
+                }
+              }} disabled={isChatting}>
+              <button class="btn btn-primary" onclick={sendChatMessage} disabled={isChatting}>
+                {isChatting ? '送信中...' : '送信'}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="tab-pane fade" id="live-tab-pane" role="tabpanel" aria-labelledby="live-tab" tabindex="0">
         <p>This is the content for the Live tab.</p>

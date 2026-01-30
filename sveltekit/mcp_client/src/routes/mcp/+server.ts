@@ -120,6 +120,33 @@ export const POST: RequestHandler = async ({ request }) => {
 			return new Response(JSON.stringify(result));
 		}
 
+		if (body.type === 'chat') {
+			const modelName = body.model || 'gemini-2.5-flash';
+			const apiKey = process.env.GEMINI_API_KEY;
+			if (!apiKey) {
+				return new Response(JSON.stringify({ error: 'GEMINI_API_KEY environment variable is not set on the server.' }), { status: 500 });
+			}
+
+			const messages = body.messages || [];
+			const contents = messages.map((msg: any) => ({
+				role: msg.role === 'assistant' ? 'model' : 'user',
+				parts: [{ text: msg.text }]
+			}));
+
+			const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ contents })
+			});
+
+			const geminiData = await geminiRes.json();
+			if (geminiData.error) {
+				return new Response(JSON.stringify({ error: geminiData.error.message }), { status: 500 });
+			}
+			const responseText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+			return new Response(JSON.stringify({ text: responseText }));
+		}
+
 		return new Response(JSON.stringify({ error: 'Invalid message type' }), { status: 400 });
 	} catch (e: any) {
 		console.error("MCP Error:", e);
