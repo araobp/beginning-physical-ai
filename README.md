@@ -1,5 +1,7 @@
 # Beginning Physical AI
 
+このプロジェクトは、ほぼ、高校生の自由研究的な世界だが、フィジカル・原始的なところから始めたほうが、個々の仕組みを理解でき、かつ、全体を見渡せて、課題感も浮き彫りに出来る。
+
 <img src="docs/4DoF_Robot_Kit.jpg" width="500px">
 
 ## Qiita記事投稿
