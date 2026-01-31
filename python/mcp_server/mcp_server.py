@@ -55,6 +55,9 @@ ARUCO_MARKER_ID = 14
 ARUCO_MARKER_SIZE_CM = 6.3
 # 使用するカメラのデバイスID
 CAMERA_ID = 0
+# カメラの解像度
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 
 mcp = FastMCP(
     "RobotArmController"
@@ -95,7 +98,9 @@ def get_vision_system():
                 camera_params_path=CAMERA_PARAMS_PATH,
                 marker_id=ARUCO_MARKER_ID,
                 marker_size_cm=ARUCO_MARKER_SIZE_CM,
-                cam_id=CAMERA_ID
+                cam_id=CAMERA_ID,
+                width=CAMERA_WIDTH,
+                height=CAMERA_HEIGHT
             )
             print("Vision system initialized successfully.")
         except Exception as e:

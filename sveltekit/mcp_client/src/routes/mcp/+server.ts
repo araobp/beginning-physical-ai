@@ -53,10 +53,14 @@ export const GET: RequestHandler = async () => {
 };
 
 export const POST: RequestHandler = async ({ request }) => {
+	let body: any;
 	try {
-		const mcp = await getClient();
-		const body = await request.json();
+		body = await request.json();
+	} catch (e) {
+		return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400 });
+	}
 
+	const processRequest = async (mcp: Client) => {
 		if (body.type === 'list_tools') {
 			const result = await mcp.listTools();
 			return new Response(JSON.stringify(result));
@@ -164,14 +168,14 @@ export const POST: RequestHandler = async ({ request }) => {
 			});
 
 			// 3. ReAct loop
-			for (let i = 0; i < 5; i++) { // Limit to 5 turns to prevent infinite loops
+			for (let i = 0; i < 5; i++) {
+				const payload = JSON.stringify({ contents, tools: geminiTools });
+				console.log(`[ReAct] Turn ${i + 1}: Sending request to Gemini. Payload size: ${payload.length} chars`);
+
 				const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						contents,
-						tools: geminiTools
-					})
+					body: payload
 				});
 
 				const geminiData = await geminiRes.json();
@@ -196,39 +200,79 @@ export const POST: RequestHandler = async ({ request }) => {
 					const toolResult = await mcp.callTool({ name, arguments: args });
 					console.log(`[ReAct] Tool ${name} result:`, toolResult);
 
-					// Capture images from tool result
-					if (toolResult.content && Array.isArray(toolResult.content)) {
-						for (const content of toolResult.content) {
-							if (content.type === 'text') {
+					let capturedImageBase64: string | null = null;
+
+					// Always sanitize the tool result for history
+					const historyToolResult = JSON.parse(JSON.stringify(toolResult));
+
+					if (historyToolResult.content && Array.isArray(historyToolResult.content)) {
+						for (const content of historyToolResult.content) {
+							if (content.type === 'text' && typeof content.text === 'string') {
+								let sanitized = false;
 								try {
 									const parsed = JSON.parse(content.text);
 									if (parsed.image_jpeg_base64) {
+										capturedImageBase64 = parsed.image_jpeg_base64;
 										const imageId = randomUUID();
 										imageCache.set(imageId, parsed.image_jpeg_base64);
 										capturedImages.push({ id: imageId, data: `data:image/jpeg;base64,${parsed.image_jpeg_base64}` });
+
+										// Sanitize the text for history
+										content.text = JSON.stringify({
+											status: "image_captured",
+											image_id: imageId
+										});
+										sanitized = true;
 									}
 								} catch (e) {}
+
+								if (!sanitized && content.text.length > 1000) {
+									content.text = content.text.substring(0, 1000) + "... <truncated>";
+								}
 							}
 						}
 					}
 
-					contents.push({ role: 'tool', parts: [{ functionResponse: { name, response: toolResult } }] });
+					contents.push({ role: 'tool', parts: [{ functionResponse: { name, response: historyToolResult } }] });
+
+					// If we captured an image, send it inline so Gemini can see it NOW
+					if (capturedImageBase64) {
+						contents.push({
+							role: 'user',
+							parts: [{
+								inline_data: {
+									mime_type: "image/jpeg",
+									data: capturedImageBase64
+								}
+							}]
+						});
+					}
 				} else {
 					return new Response(JSON.stringify({ text: `Unexpected response from model: ${JSON.stringify(candidate.content)}` }));
 				}
 			}
 
-			return new Response(JSON.stringify({ error: "Model did not produce a text response after 5 tool calls." }), { status: 500 });
+			return new Response(JSON.stringify({ error: "Model did not produce a text response after 5 turns." }), { status: 500 });
 		}
 
 		return new Response(JSON.stringify({ error: 'Invalid message type' }), { status: 400 });
-	} catch (e: any) {
-		console.error("MCP Error:", e);
-		// Reset client on error to force reconnection
-		if (client) {
-			try { await client.close(); } catch {}
-			client = null;
+	};
+
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			const mcp = await getClient();
+			return await processRequest(mcp);
+		} catch (e: any) {
+			console.error(`MCP Error (attempt ${attempt}):`, e);
+			// Reset client on error to force reconnection
+			if (client) {
+				try { await client.close(); } catch {}
+				client = null;
+			}
+			if (attempt === 1) {
+				return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+			}
 		}
-		return new Response(JSON.stringify({ error: e.message }), { status: 500 });
 	}
+	return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500 });
 };

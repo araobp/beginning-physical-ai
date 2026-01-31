@@ -12,6 +12,7 @@
   let tools = $state<Tool[]>([]);
   let error = $state<string | null>(null);
   let cameraImage = $state<string | null>(null);
+  let currentImage = $state<string | null>(null);
   let capturing = $state(false);
   let selectedTool = $state<Tool | null>(null);
   let toolArgs = $state<Record<string, any>>({});
@@ -31,17 +32,23 @@
   interface ChatMessage {
     role: string;
     text: string;
-    image?: string;
-    imageId?: string;
   }
-  let chatMessages = $state<ChatMessage[]>([
-    { role: 'assistant', text: 'こんにちは！何かお手伝いできることはありますか？' },
-    { role: 'user', text: 'テストメッセージ' },
-  ]);
+  let chatLanguage = $state("ja");
+
+  function getInitialMessages(lang: string): ChatMessage[] {
+    if (lang === 'en') {
+      return [{ role: 'assistant', text: 'Hello! How can I help you today?' }];
+    }
+    return [{ role: 'assistant', text: 'こんにちは！何かお手伝いできることはありますか？' }];
+  }
+
+  let chatMessages = $state<ChatMessage[]>(getInitialMessages("ja"));
   let chatModel = $state("gemini-2.5-flash");
   let isChatting = $state(false);
   let chatContainer = $state<HTMLElement | null>(null);
   let chatInputElement = $state<HTMLInputElement | null>(null);
+  let abortController = $state<AbortController | null>(null);
+  let elapsedTime = $state(0);
   
   const boxColors = [
     '#FF3838', // Red
@@ -172,6 +179,7 @@
               const parsed = JSON.parse(content.text);
               if (parsed.image_jpeg_base64) {
                 cameraImage = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
+                currentImage = cameraImage;
                 return;
               }
             } catch (e) {
@@ -224,6 +232,7 @@
         return;
       }
       cameraImage = result.image;
+      currentImage = cameraImage;
       detectedObjects = result.objects.map((o: any) => ({ ...o, imageCoords: null, worldCoords: null, isTransforming: false }));
     } catch (e: any) {
       console.error('Detection failed:', e);
@@ -346,6 +355,7 @@
               const coords = JSON.parse(content.text);
               if (coords.image_jpeg_base64) {
                 cameraImage = `data:image/jpeg;base64,${coords.image_jpeg_base64}`;
+                currentImage = cameraImage;
               }
               if (typeof coords.x === 'number') {
                  targetWorldCoords = coords;
@@ -395,20 +405,28 @@
     chatInput = "";
     chatMessages = [...chatMessages, { role: 'user', text: userText }];
     isChatting = true;
+    elapsedTime = 0;
+    abortController = new AbortController();
+    const timer = setInterval(() => {
+      elapsedTime++;
+    }, 1000);
 
     try {
       const res = await fetch('/mcp', {
         method: 'POST',
         body: JSON.stringify({
           type: 'chat',
-          messages: chatMessages.map(msg => ({
-            role: msg.role,
-            text: msg.text,
-            imageId: msg.imageId // Send ID instead of full image data
-          })),
+          messages: chatMessages.map((msg, index) => {
+            const payload: any = { role: msg.role, text: msg.text };
+            if (index === chatMessages.length - 1 && msg.role === 'user' && currentImage) {
+              payload.image = currentImage;
+            }
+            return payload;
+          }),
           model: chatModel
         }),
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        signal: abortController.signal
       });
       
       const result = await res.json();
@@ -426,20 +444,49 @@
       
       if (result.images && Array.isArray(result.images)) {
         for (const img of result.images) {
-          chatMessages = [...chatMessages, { role: 'assistant', text: '', image: img.data, imageId: img.id }];
+          currentImage = img.data;
         }
       }
 
       chatMessages = [...chatMessages, { role: 'assistant', text: responseText }];
     } catch (e: any) {
-      chatMessages = [...chatMessages, { role: 'assistant', text: `Error: ${e.message}` }];
+      if (e.name === 'AbortError') {
+        chatMessages = [...chatMessages, { role: 'assistant', text: '問い合わせをキャンセルしました。' }];
+      } else {
+        chatMessages = [...chatMessages, { role: 'assistant', text: `Error: ${e.message}` }];
+      }
     } finally {
       isChatting = false;
+      clearInterval(timer);
+      abortController = null;
+    }
+  }
+
+  function updateChatLanguage() {
+    chatMessages = getInitialMessages(chatLanguage);
+  }
+
+  function resendLastMessage() {
+    const lastUserMsg = chatMessages.slice().reverse().find(msg => msg.role === 'user');
+    if (lastUserMsg) {
+      chatInput = lastUserMsg.text;
+      sendChatMessage();
+    }
+  }
+
+  function clearChatHistory() {
+    chatMessages = getInitialMessages(chatLanguage);
+  }
+
+  function cancelChat() {
+    if (abortController) {
+      abortController.abort();
     }
   }
 
   $effect(() => {
     chatMessages;
+    isChatting;
     if (chatContainer) {
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
@@ -488,6 +535,7 @@
     integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
     crossorigin="anonymous"
   />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
 </svelte:head>
@@ -573,7 +621,7 @@
           <div class="mb-3 d-flex gap-2 align-items-center">
             <select class="form-select w-auto" bind:value={detectionModel}>
               <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-              <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
+              <option value="ni-robotics-er-1.5-preview"gemi>gemini-robotics-er-1.5-preview</option>
               <option value="tensorflow.js">tensorflow.js</option>
             </select>
             <div class="form-check">
@@ -643,44 +691,79 @@
         </div>
       </div>
       <div class="tab-pane fade" id="chat-tab-pane" role="tabpanel" aria-labelledby="chat-tab" tabindex="0">
-        <div class="d-flex flex-column mx-auto border" style="height: 70vh; max-width: 800px;">
-          <div class="p-2 bg-light border-bottom d-flex justify-content-end align-items-center gap-2">
-            <select class="form-select w-auto" bind:value={chatModel}>
-              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-              <option value="gemini-2.0-flash-thinking-exp-01-21">gemini-2.0-flash-thinking-exp-01-21</option>
-              <option value="gemini-exp-1206">gemini-exp-1206</option>
-            </select>
-          </div>
-          <div class="flex-grow-1 overflow-auto p-3" style="background-color: #7297c4;" bind:this={chatContainer}>
-            {#each chatMessages as msg}
-              <div class="d-flex mb-3 {msg.role === 'user' ? 'justify-content-end' : 'justify-content-start'}">
-                {#if msg.role === 'assistant'}
-                  <div class="me-2 d-flex flex-column align-items-center">
-                    <div class="rounded-circle bg-white d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
-                      <span style="font-size: 24px;">🤖</span>
-                    </div>
-                  </div>
-                {/if}
-                <div class="p-2 rounded-3 shadow-sm" style="max-width: 70%; background-color: {msg.role === 'user' ? '#98e165' : 'white'}; position: relative;">
-                  {#if msg.image}
-                    <img src={msg.image} alt="Captured" class="img-fluid rounded mb-2" />
-                  {/if}
-                  <div style="white-space: pre-wrap;">{msg.text}</div>
-                </div>
-              </div>
-            {/each}
-          </div>
-          <div class="p-2 bg-light border-top">
-            <div class="input-group">
-              <input type="text" class="form-control" placeholder="メッセージを入力" bind:value={chatInput} bind:this={chatInputElement} onkeydown={(e) => {
-                if (e.key === 'Enter' && !e.isComposing) {
-                  sendChatMessage();
-                }
-              }} disabled={isChatting}>
-              <button class="btn btn-primary" onclick={sendChatMessage} disabled={isChatting}>
-                {isChatting ? '送信中...' : '送信'}
+        <div class="d-flex border" style="height: 70vh;">
+          <!-- Left Column: Chat -->
+          <div class="d-flex flex-column w-50 border-end">
+            <div class="p-2 bg-light border-bottom d-flex justify-content-end align-items-center gap-2">
+              <button class="btn btn-outline-danger btn-sm" onclick={clearChatHistory} title="履歴をクリア">
+                <i class="bi bi-trash"></i>
               </button>
+              <select class="form-select w-auto" bind:value={chatLanguage} onchange={updateChatLanguage}>
+                <option value="ja">日本語</option>
+                <option value="en">English</option>
+              </select>
+              <select class="form-select w-auto" bind:value={chatModel}>
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+              </select>
             </div>
+            <div class="flex-grow-1 overflow-auto p-3" style="background-color: #7297c4;" bind:this={chatContainer}>
+              {#each chatMessages as msg}
+                <div class="d-flex mb-3 {msg.role === 'user' ? 'justify-content-end' : 'justify-content-start'}">
+                  {#if msg.role === 'assistant'}
+                    <div class="me-2 d-flex flex-column align-items-center">
+                      <div class="rounded-circle bg-white d-flex align-items-center justify-content-center" style="width: 40px; height: 40px;">
+                        <span style="font-size: 24px;">🤖</span>
+                      </div>
+                    </div>
+                  {/if}
+                  <div class="p-2 rounded-3 shadow-sm" style="max-width: 70%; background-color: {msg.role === 'user' ? '#98e165' : 'white'}; position: relative;">
+                    <div style="white-space: pre-wrap;">{msg.text}</div>
+                  </div>
+                </div>
+              {/each}
+              {#if isChatting}
+                <div class="d-flex align-items-center justify-content-center mt-3 mb-2">
+                  <div class="spinner-border text-light spinner-border-sm me-2" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                  </div>
+                  <span class="text-white me-2 fw-bold">{elapsedTime}s</span>
+                  <button class="btn btn-sm btn-danger" onclick={cancelChat}>キャンセル</button>
+                </div>
+              {/if}
+            </div>
+            <div class="p-2 bg-light border-top">
+              <div class="input-group custom-input-group">
+                <input type="text" class="form-control" placeholder="メッセージを入力" bind:value={chatInput} bind:this={chatInputElement} onkeydown={(e) => {
+                  if (e.key === 'Enter' && !e.isComposing) {
+                    sendChatMessage();
+                  }
+                }} disabled={isChatting}>
+                <button class="btn btn-secondary" onclick={resendLastMessage} disabled={isChatting || !chatMessages.some(m => m.role === 'user')} title="再送">
+                  <i class="bi bi-arrow-counterclockwise"></i>
+                </button>
+                <button class="btn btn-primary" onclick={sendChatMessage} disabled={isChatting}>
+                  {#if isChatting}
+                    <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                  {:else}
+                    <i class="bi bi-send-fill"></i>
+                  {/if}
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Right Column: Cached Images -->
+          <div class="w-50 p-3 overflow-auto bg-light">
+            <h5 class="mb-3">ロボットの目</h5>
+            {#if !currentImage}
+              <div class="text-muted p-5 border rounded bg-white text-center">
+                No Image Captured
+              </div>
+            {:else}
+              <div class="card mb-3 shadow-sm">
+                <img src={currentImage} class="card-img-top" alt="Cached" />
+              </div>
+            {/if}
           </div>
         </div>
       </div>
@@ -745,3 +828,13 @@
     </div>
   </div>
 </main>
+
+<style>
+  .custom-input-group:focus-within {
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+    border-radius: 0.375rem;
+  }
+  .custom-input-group .form-control:focus {
+    box-shadow: none;
+  }
+</style>

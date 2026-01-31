@@ -7,7 +7,7 @@ class VisionSystem:
     """
     カメラを用いた姿勢推定と座標変換を管理するクラス。
     """
-    def __init__(self, camera_params_path, marker_id, marker_size_cm, cam_id=0):
+    def __init__(self, camera_params_path, marker_id, marker_size_cm, cam_id=0, width=1280, height=720):
         """
         VisionSystemを初期化します。
 
@@ -16,6 +16,8 @@ class VisionSystem:
             marker_id (int): 追跡するArUcoマーカーのID。
             marker_size_cm (float): ArUcoマーカーのサイズ(cm)。
             cam_id (int): 使用するカメラのID。
+            width (int): カメラの解像度（幅）。デフォルトは1280。
+            height (int): カメラの解像度（高さ）。デフォルトは720。
         """
         self.marker_id = marker_id
         self.marker_size_cm = marker_size_cm
@@ -36,6 +38,8 @@ class VisionSystem:
         self.cap = cv2.VideoCapture(cam_id)
         if not self.cap.isOpened():
             raise IOError(f"カメラ {cam_id} を開けません。")
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
         # 姿勢データ (update_pose()で更新)
         self.rvec = None
