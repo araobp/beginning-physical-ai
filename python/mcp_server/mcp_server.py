@@ -14,6 +14,9 @@ import json
 import base64
 import cv2
 import re
+import sys
+import queue
+import threading
 from vision_system import VisionSystem
 
 # --- 基本設定 ---
@@ -56,6 +59,12 @@ ARUCO_MARKER_SIZE_CM = 6.3
 # 使用するカメラのデバイスID
 CAMERA_ID = 0
 
+# ロボットベースのオフセット設定 (cm)
+# ビジョン座標系(ArUco原点)からロボットベース座標系への変換
+# カッティングマットの15cmの位置へロボットのベース前方を密着させた場合の調整値
+ROBOT_BASE_OFFSET_X = -14 - 5.5
+ROBOT_BASE_OFFSET_Y = -10.0
+
 mcp = FastMCP(
     "RobotArmController"
 )
@@ -64,6 +73,9 @@ mcp = FastMCP(
 # VisionSystemとシリアル接続は、必要になるまで初期化しない（遅延初期化）
 _vision_system = None
 _serial_conn = None
+
+# GUI起動リクエスト用のキュー (macOSでのOpenCVスレッド制約対策)
+gui_queue = queue.Queue()
 
 # --- 内部ヘルパー関数 ---
 def _fetch_workpiece_data():
@@ -95,7 +107,9 @@ def get_vision_system():
                 camera_params_path=CAMERA_PARAMS_PATH,
                 marker_id=ARUCO_MARKER_ID,
                 marker_size_cm=ARUCO_MARKER_SIZE_CM,
-                cam_id=CAMERA_ID
+                cam_id=CAMERA_ID,
+                robot_offset_x=ROBOT_BASE_OFFSET_X,
+                robot_offset_y=ROBOT_BASE_OFFSET_Y
             )
             print("Vision system initialized successfully.")
         except Exception as e:
@@ -243,8 +257,10 @@ def convert_image_coords_to_world(u: int, v: int) -> str:
         v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。
     
     Returns:
-        変換に成功した場合: `{"x": float, "y": float, "z": 0.0, "image_jpeg_base64": "..."}` という形式のJSON文字列。
-        座標の単位はcm。`image_jpeg_base64` には、ターゲット位置を描画した画像のBase64エンコード文字列が含まれます。
+        変換に成功した場合: `{"x": float, "y": float, "z": 0.0, "xw": float, "yw": float, "image_jpeg_base64": "..."}` という形式のJSON文字列。
+        - x, y: ビジョン座標系（マーカー原点）での座標 (cm)
+        - xw, yw: ロボットベース座標系での座標 (cm)。アーム操作(execute_sequence)にはこの値を使用してください。
+        - image_jpeg_base64: ターゲット位置を描画した画像のBase64エンコード文字列。
         変換に失敗した場合: 失敗理由を示すエラーメッセージ文字列。
     """
     vs = get_vision_system()
@@ -258,6 +274,16 @@ def convert_image_coords_to_world(u: int, v: int) -> str:
     
     if coords:
         response_data = coords
+        # ロボットベース座標系(cm)への変換
+        # x, yはcm単位
+        raw_x = response_data["x"]
+        raw_y = response_data["y"]
+        
+        response_data["x"] = round(raw_x, 1)
+        response_data["y"] = round(raw_y, 1)
+        response_data["xw"] = round(raw_x + ROBOT_BASE_OFFSET_X, 1)
+        response_data["yw"] = round(raw_y + ROBOT_BASE_OFFSET_Y, 1)
+
         if annotated_frame is not None:
             _, buffer = cv2.imencode('.jpg', annotated_frame)
             base64_image = base64.b64encode(buffer).decode('utf-8')
@@ -267,12 +293,91 @@ def convert_image_coords_to_world(u: int, v: int) -> str:
     else:
         return "Error: Could not perform coordinate conversion. Ensure the ArUco marker is clearly visible to the camera."
 
-if __name__ == "__main__":
+@mcp.tool()
+def get_pick_place_coordinates() -> str:
+    """
+    Vision GUIで設定されたPick位置とPlace位置の座標情報を取得します。
+    
+    戻り値 (JSON):
+    - status: "success" または "failure"
+    - pick: Pick位置の座標情報 {x, y, xw, yw, u, v} または null
+      - x, y: ビジョン座標系 (cm単位)
+      - xw, yw: ロボットベース座標系 (cm単位、オフセット考慮済み)。アーム操作にはこれを使用。
+    - place: Place位置の座標情報 {x, y, xw, yw, u, v} または null (同上)
+    - error: エラー時のメッセージ
+    """
     try:
-        # MCPサーバーを起動し、HTTP経由での接続を待ち受ける
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=8888)
-    finally:
-        # プログラム終了時に、確保したリソースを確実に解放する
-        if _vision_system:
-            _vision_system.release() # カメラを解放
-            print("Vision system resources released.")
+        vs = get_vision_system()
+        if not vs:
+            return json.dumps({
+                "status": "failure",
+                "error": "Vision system could not be initialized."
+            })
+        
+        def process_point(pt):
+            if pt:
+                return {
+                    "u": pt["u"],
+                    "v": pt["v"],
+                    "x": round(pt["x"], 1),
+                    "y": round(pt["y"], 1),
+                    "xw": round(pt["x"] + ROBOT_BASE_OFFSET_X, 1),
+                    "yw": round(pt["y"] + ROBOT_BASE_OFFSET_Y, 1)
+                }
+            return None
+
+        return json.dumps({
+            "status": "success",
+            "pick": process_point(vs.pick_point),
+            "place": process_point(vs.place_point)
+        })
+    except Exception as e:
+        return json.dumps({
+            "status": "failure",
+            "error": str(e)
+        })
+
+@mcp.tool()
+def launch_vision_gui() -> str:
+    """
+    サーバー側でビジョンシステムのGUIウィンドウを起動します。
+    このウィンドウでは、マウスクリックによるPick & Place位置の指定と座標確認が可能です。
+    """
+    # メインスレッドでGUIを起動するためにキューにリクエストを入れる
+    gui_queue.put("launch")
+    return "Vision GUI launch requested. Please check the server window."
+
+if __name__ == "__main__":
+    if "--gui" in sys.argv:
+        # GUIモードで起動
+        vs = get_vision_system()
+        if vs:
+            vs.run_interactive_mode()
+            vs.release()
+    else:
+        # MCPサーバーをバックグラウンドスレッドで起動し、メインスレッドはGUIイベントを待機する
+        # (macOSなどではOpenCVのGUI操作はメインスレッドで行う必要があるため)
+        def run_server():
+            try:
+                mcp.run(transport="streamable-http", host="0.0.0.0", port=8888)
+            except Exception as e:
+                print(f"Server error: {e}")
+
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+        print("MCP Server running in background thread.")
+
+        try:
+            while True:
+                try:
+                    if gui_queue.get(timeout=1.0) == "launch":
+                        vs = get_vision_system()
+                        if vs:
+                            vs.run_interactive_mode()
+                except queue.Empty:
+                    pass
+        finally:
+            # プログラム終了時に、確保したリソースを確実に解放する
+            if _vision_system:
+                _vision_system.release() # カメラを解放
+                print("Vision system resources released.")

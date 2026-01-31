@@ -7,7 +7,7 @@ class VisionSystem:
     """
     カメラを用いた姿勢推定と座標変換を管理するクラス。
     """
-    def __init__(self, camera_params_path, marker_id, marker_size_cm, cam_id=0):
+    def __init__(self, camera_params_path, marker_id, marker_size_cm, cam_id=0, width=1920, height=1080, display_width=None, robot_offset_x=0.0, robot_offset_y=0.0):
         """
         VisionSystemを初期化します。
 
@@ -16,9 +16,17 @@ class VisionSystem:
             marker_id (int): 追跡するArUcoマーカーのID。
             marker_size_cm (float): ArUcoマーカーのサイズ(cm)。
             cam_id (int): 使用するカメラのID。
+            width (int): カメラの横解像度。
+            height (int): カメラの縦解像度。
+            display_width (int, optional): 表示ウィンドウの横幅。Noneの場合はリサイズしない。
+            robot_offset_x (float): ロボットベースのXオフセット(cm)。
+            robot_offset_y (float): ロボットベースのYオフセット(cm)。
         """
         self.marker_id = marker_id
         self.marker_size_cm = marker_size_cm
+        self.display_width = display_width
+        self.robot_offset_x = robot_offset_x
+        self.robot_offset_y = robot_offset_y
 
         # カメラパラメータの読み込み
         try:
@@ -36,6 +44,8 @@ class VisionSystem:
         self.cap = cv2.VideoCapture(cam_id)
         if not self.cap.isOpened():
             raise IOError(f"カメラ {cam_id} を開けません。")
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
         # 姿勢データ (update_pose()で更新)
         self.rvec = None
@@ -47,6 +57,17 @@ class VisionSystem:
         self.pose_cache_duration = 0.1  # 秒
         self.last_processed_frame = None
         self.last_frame_capture_time = 0
+        
+        # インタラクティブモード用の状態
+        self.pick_point = None
+        self.place_point = None
+        self.window_name = "Robot Camera View"
+        self.need_capture = False
+        self.should_exit = False
+
+        # 静止画モード用の保持データ
+        self.static_rvec = None
+        self.static_tvec = None
 
     def _get_marker_model_cm(self, size_cm):
         """マーカーの3Dモデル座標を定義（右手座標系、原点は右下）"""
@@ -95,7 +116,7 @@ class VisionSystem:
         self.rvec, self.tvec, self.R, self.camera_pos = None, None, None, None
         return False
 
-    def get_undistorted_image_base64(self):
+    def get_undistorted_image_base64(self, display=False):
         """
         フレームをキャプチャして歪み補正を行い、Base64エンコードされたJPEG文字列として返す。
         """
@@ -122,21 +143,82 @@ class VisionSystem:
             cv2.putText(undistorted_frame, 'Y', tuple(axis_points_2d[1].ravel().astype(int)), font, 0.7, (0, 255, 0), 2)
             cv2.putText(undistorted_frame, 'Z', tuple(axis_points_2d[2].ravel().astype(int)), font, 0.7, (255, 0, 0), 2)
 
+        if display:
+            if self.display_width:
+                h, w = undistorted_frame.shape[:2]
+                display_height = int(h * (self.display_width / w))
+                cv2.imshow("Robot Camera View", cv2.resize(undistorted_frame, (self.display_width, display_height)))
+            else:
+                cv2.imshow("Robot Camera View", undistorted_frame)
+            cv2.waitKey(1)
+
         _, buffer = cv2.imencode('.jpg', undistorted_frame)
         return base64.b64encode(buffer).decode('utf-8')
 
-    def convert_2d_to_3d(self, u, v, draw_target=False):
+    def draw_detections(self, detections):
+        """
+        キャッシュされた最新フレームに検出結果（バウンディングボックス、ラベル、把持点）を描画してBase64画像を返す。
+        
+        Args:
+            detections (list): 検出オブジェクトのリスト。
+                各要素は {"label": str, "box_2d": [ymin, xmin, ymax, xmax], "ground_contact_point_2d": [y, x]} などを想定。
+                座標は 0-1000 の正規化座標。
+        """
+        if self.last_processed_frame is None:
+            return None
+
+        frame = self.last_processed_frame.copy()
+        h, w = frame.shape[:2]
+
+        for det in detections:
+            label = str(det.get("label", "Object"))
+            box = det.get("box_2d")
+            
+            # バウンディングボックスの描画
+            if box and len(box) == 4:
+                ymin, xmin, ymax, xmax = box
+                # 0-1000 scale to pixel
+                x1 = int(xmin * w / 1000)
+                y1 = int(ymin * h / 1000)
+                x2 = int(xmax * w / 1000)
+                y2 = int(ymax * h / 1000)
+                
+                color = (0, 255, 0) # Green
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+            # 把持ポイント/接地点の描画
+            point = det.get("ground_contact_point_2d")
+            if point and len(point) == 2:
+                py, px = point
+                cx = int(px * w / 1000)
+                cy = int(py * h / 1000)
+                cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1) # Red dot
+
+        _, buffer = cv2.imencode('.jpg', frame)
+        return base64.b64encode(buffer).decode('utf-8')
+
+    def convert_2d_to_3d(self, u, v, draw_target=False, rvec=None, tvec=None):
         """
         歪み補正済み画像の2Dピクセル座標(u, v)を、3D世界座標(x, y, z=0)に変換する。
         カメラの姿勢が既知である必要がある。
         戻り値: (座標辞書, 描画済みフレーム) または (None, None)
         """
-        if not self.update_pose(force_update=False) and (self.R is None or self.camera_pos is None):
-            return None, None
+        if rvec is not None and tvec is not None:
+            # 指定された姿勢を使用（静止画モードなど）
+            current_rvec, current_tvec = rvec, tvec
+            R, _ = cv2.Rodrigues(rvec)
+            camera_pos = -np.dot(R.T, tvec.flatten())
+        else:
+            # 現在のシステム姿勢を使用
+            if not self.update_pose(force_update=False) and (self.R is None or self.camera_pos is None):
+                return None, None
+            current_rvec, current_tvec = self.rvec, self.tvec
+            R, camera_pos = self.R, self.camera_pos
 
         fx, fy, cx, cy = self.mtx[0, 0], self.mtx[1, 1], self.mtx[0, 2], self.mtx[1, 2]
         ray_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
-        ray_world = np.dot(self.R.T, ray_cam)
+        ray_world = np.dot(R.T, ray_cam)
 
         annotated_frame = None
         if draw_target and self.last_processed_frame is not None:
@@ -144,15 +226,212 @@ class VisionSystem:
             # ターゲット位置に円を描画
             cv2.circle(annotated_frame, (u, v), 10, (0, 255, 255), 2)
             # 座標軸も描画
-            if self.rvec is not None and self.tvec is not None:
-                 cv2.drawFrameAxes(annotated_frame, self.mtx, np.zeros((5, 1)), self.rvec, self.tvec, self.marker_size_cm * 0.8)
+            if current_rvec is not None and current_tvec is not None:
+                 cv2.drawFrameAxes(annotated_frame, self.mtx, np.zeros((5, 1)), current_rvec, current_tvec, self.marker_size_cm * 0.8)
 
         if abs(ray_world[2]) > 1e-6:
-            s = -self.camera_pos[2] / ray_world[2]
-            intersect_3d = self.camera_pos + s * ray_world
+            s = -camera_pos[2] / ray_world[2]
+            intersect_3d = camera_pos + s * ray_world
             return {"x": intersect_3d[0], "y": intersect_3d[1], "z": 0.0}, annotated_frame
         
         return None, annotated_frame
+
+    def _mouse_callback(self, event, x, y, flags, param):
+        """マウスイベントのコールバック関数"""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Clearボタンの判定 (右上の領域)
+            if self.last_processed_frame is not None:
+                h, w = self.last_processed_frame.shape[:2]
+                
+                # ボタン配置設定
+                margin = 10
+                btn_h = 50
+                gap = 10
+                quit_w = 100
+                clear_w = 110
+                capture_w = 140
+                
+                # Quitボタン: 右上
+                quit_x1 = w - margin - quit_w
+                quit_x2 = w - margin
+                if (quit_x1 <= x <= quit_x2) and (margin <= y <= margin + btn_h):
+                    self.should_exit = True
+                    print("Quit requested.")
+                    return
+
+                # Clearボタン: Quitの左
+                clear_x1 = quit_x1 - gap - clear_w
+                clear_x2 = quit_x1 - gap
+                if (clear_x1 <= x <= clear_x2) and (margin <= y <= margin + btn_h):
+                    self.pick_point = None
+                    self.place_point = None
+                    print("Points cleared.")
+                    return
+                
+                # Captureボタン: Clearの左
+                cap_x1 = clear_x1 - gap - capture_w
+                cap_x2 = clear_x1 - gap
+                if (cap_x1 <= x <= cap_x2) and (margin <= y <= margin + btn_h):
+                    self.need_capture = True
+                    print("Capture requested.")
+                    return
+
+            # 座標変換とポイント設定
+            # 静止画モードの場合は、その時点の姿勢(static_rvec/tvec)を使用する
+            coords, _ = self.convert_2d_to_3d(x, y, draw_target=False, rvec=self.static_rvec, tvec=self.static_tvec)
+            if coords:
+                pt = {'u': x, 'v': y, 'x': coords['x'], 'y': coords['y']}
+                if self.pick_point is None:
+                    self.pick_point = pt
+                    print(f"Pick point set: {pt}")
+                elif self.place_point is None:
+                    self.place_point = pt
+                    print(f"Place point set: {pt}")
+                else:
+                    # 両方設定済みの場合はPickから再設定（Placeはクリア）
+                    self.pick_point = pt
+                    self.place_point = None
+                    print(f"Pick point updated: {pt}")
+
+    def run_interactive_mode(self):
+        """
+        GUIウィンドウを表示し、インタラクティブな操作（Pick & Place位置指定）を行うモード。
+        静止画キャプチャベースで動作します。
+        """
+        cv2.namedWindow(self.window_name)
+        cv2.setMouseCallback(self.window_name, self._mouse_callback)
+        
+        print("Interactive mode started. Press 'q' to exit.")
+        
+        self.need_capture = True # 最初はキャプチャする
+        self.should_exit = False
+        
+        # 表示用の静止画データ
+        display_frame = None
+
+        try:
+            while not self.should_exit:
+                # キャプチャ要求があれば更新
+                if self.need_capture:
+                    self.update_pose(force_update=True, visualize_axes=False)
+                    if self.last_processed_frame is not None:
+                        display_frame = self.last_processed_frame.copy()
+                        self.static_rvec = self.rvec.copy() if self.rvec is not None else None
+                        self.static_tvec = self.tvec.copy() if self.tvec is not None else None
+                    self.need_capture = False
+                
+                if display_frame is None:
+                    # フレームがない場合でも終了できるようにキー入力をチェック
+                    if cv2.waitKey(100) & 0xFF == ord('q'):
+                        break
+                    time.sleep(0.01)
+                    continue
+
+                # 描画用にコピーを作成（ボタンなどを毎回描画するため）
+                frame_to_show = display_frame.copy()
+                
+                # 軸の描画
+                if self.static_rvec is not None and self.static_tvec is not None:
+                    length = self.marker_size_cm * 0.8
+                    cv2.drawFrameAxes(frame_to_show, self.mtx, np.zeros((5, 1)), self.static_rvec, self.static_tvec, length)
+                
+                # Pick & Place ポイントの描画
+                for pt, color, label in [(self.pick_point, (128, 0, 128), "Pick"), (self.place_point, (128, 0, 0), "Place")]:
+                    if pt:
+                        # ポイント描画
+                        cv2.circle(frame_to_show, (pt['u'], pt['v']), 10, color, -1)
+                        
+                        # フォント設定
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 0.9
+                        thickness = 2
+                        
+                        # ラベル描画
+                        label_size, _ = cv2.getTextSize(label, font, font_scale, thickness)
+                        label_x = pt['u'] + 15
+                        label_y = pt['v'] + label_size[1] // 2
+                        cv2.putText(frame_to_show, label, (label_x, label_y), font, font_scale, color, thickness)
+                        
+                        # 座標テキスト作成
+                        uv_text = f"u: {pt['u']}, v: {pt['v']} (px)"
+                        xy_text = f"x: {pt['x']:.1f}, y: {pt['y']:.1f} (cm)"
+                        xw = pt['x'] + self.robot_offset_x
+                        yw = pt['y'] + self.robot_offset_y
+                        xwyw_text = f"xw: {xw:.1f}, yw: {yw:.1f} (cm)"
+                        
+                        # テキストサイズと枠の計算
+                        uv_size, _ = cv2.getTextSize(uv_text, font, font_scale, thickness)
+                        xy_size, _ = cv2.getTextSize(xy_text, font, font_scale, thickness)
+                        xwyw_size, _ = cv2.getTextSize(xwyw_text, font, font_scale, thickness)
+                        
+                        box_pad = 10
+                        line_gap = 15
+                        box_w = max(uv_size[0], xy_size[0], xwyw_size[0]) + box_pad * 2
+                        box_h = uv_size[1] + xy_size[1] + xwyw_size[1] + line_gap * 2 + box_pad * 2
+                        
+                        box_x = label_x + label_size[0] + 15
+                        box_y = pt['v'] - box_h // 2
+                        
+                        # 枠の描画 (半透明の白背景 + 色枠)
+                        overlay = frame_to_show.copy()
+                        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h), (255, 255, 255), -1)
+                        alpha = 0.6
+                        cv2.addWeighted(overlay, alpha, frame_to_show, 1 - alpha, 0, frame_to_show)
+                        cv2.rectangle(frame_to_show, (box_x, box_y), (box_x + box_w, box_y + box_h), color, thickness)
+                        
+                        # テキスト描画
+                        cv2.putText(frame_to_show, uv_text, (box_x + box_pad, box_y + box_pad + uv_size[1]), font, font_scale, color, thickness)
+                        cv2.putText(frame_to_show, xy_text, (box_x + box_pad, box_y + box_pad + uv_size[1] + line_gap + xy_size[1]), font, font_scale, color, thickness)
+                        cv2.putText(frame_to_show, xwyw_text, (box_x + box_pad, box_y + box_pad + uv_size[1] + line_gap + xy_size[1] + line_gap + xwyw_size[1]), font, font_scale, color, thickness)
+
+                # ボタン配置設定
+                margin = 10
+                btn_h = 50
+                gap = 10
+                quit_w = 100
+                clear_w = 110
+                capture_w = 140
+                btn_font_scale = 1.05
+                btn_thickness = 3
+
+                h, w = frame_to_show.shape[:2]
+
+                # Quitボタンの描画
+                quit_x1 = w - margin - quit_w
+                quit_y1 = margin
+                cv2.rectangle(frame_to_show, (quit_x1, quit_y1), (quit_x1 + quit_w, quit_y1 + btn_h), (220, 220, 220), -1)
+                cv2.rectangle(frame_to_show, (quit_x1, quit_y1), (quit_x1 + quit_w, quit_y1 + btn_h), (100, 100, 100), 2)
+                text_size, _ = cv2.getTextSize("Quit", cv2.FONT_HERSHEY_SIMPLEX, btn_font_scale, btn_thickness)
+                cv2.putText(frame_to_show, "Quit", (quit_x1 + (quit_w - text_size[0]) // 2, quit_y1 + (btn_h + text_size[1]) // 2), cv2.FONT_HERSHEY_SIMPLEX, btn_font_scale, (0, 0, 0), btn_thickness)
+
+                # Clearボタンの描画
+                clear_x1 = quit_x1 - gap - clear_w
+                clear_y1 = margin
+                cv2.rectangle(frame_to_show, (clear_x1, clear_y1), (clear_x1 + clear_w, clear_y1 + btn_h), (220, 220, 220), -1)
+                cv2.rectangle(frame_to_show, (clear_x1, clear_y1), (clear_x1 + clear_w, clear_y1 + btn_h), (100, 100, 100), 2)
+                text_size, _ = cv2.getTextSize("Clear", cv2.FONT_HERSHEY_SIMPLEX, btn_font_scale, btn_thickness)
+                cv2.putText(frame_to_show, "Clear", (clear_x1 + (clear_w - text_size[0]) // 2, clear_y1 + (btn_h + text_size[1]) // 2), cv2.FONT_HERSHEY_SIMPLEX, btn_font_scale, (0, 0, 0), btn_thickness)
+
+                # Captureボタンの描画
+                cap_x1 = clear_x1 - gap - capture_w
+                cap_y1 = margin
+                cv2.rectangle(frame_to_show, (cap_x1, cap_y1), (cap_x1 + capture_w, cap_y1 + btn_h), (220, 220, 220), -1)
+                cv2.rectangle(frame_to_show, (cap_x1, cap_y1), (cap_x1 + capture_w, cap_y1 + btn_h), (100, 100, 100), 2)
+                text_size, _ = cv2.getTextSize("Capture", cv2.FONT_HERSHEY_SIMPLEX, btn_font_scale, btn_thickness)
+                cv2.putText(frame_to_show, "Capture", (cap_x1 + (capture_w - text_size[0]) // 2, cap_y1 + (btn_h + text_size[1]) // 2), cv2.FONT_HERSHEY_SIMPLEX, btn_font_scale, (0, 0, 0), btn_thickness)
+
+                # 表示
+                if self.display_width:
+                    dh = int(h * (self.display_width / w))
+                    cv2.imshow(self.window_name, cv2.resize(frame_to_show, (self.display_width, dh)))
+                else:
+                    cv2.imshow(self.window_name, frame_to_show)
+
+                if cv2.waitKey(100) & 0xFF == ord('q'):
+                    break
+        finally:
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
 
     def release(self):
         """カメラリソースを解放する。"""
