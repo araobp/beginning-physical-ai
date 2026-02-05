@@ -8,10 +8,10 @@
  */
 const float L1 = 80.0;           // Length of arm segment 1
 const float L2 = 80.0;           // Length of arm segment 2
-const float L_OFF_J4_TCP = 64.0; // Horizontal offset from Joint 4 to Tool Center Point
+const float L_OFF_J4_TCP = 51.0; // Horizontal offset from Joint 4 to Tool Center Point
 const float Z_OFF_J4_TCP = 8.0;  // Vertical offset from Joint 4 to Tool Center Point
-const float OFF_J1_J2 = 12.0;    // Offset between Joint 1 and Joint 2
-const float BASE_H = 60.0;       // Height of the base
+const float OFF_J1_J2 = 15.0;    // Offset between Joint 1 and Joint 2
+const float BASE_H = 56.0;       // Height of the base
 
 const int STEP_DELAY = 10;       // Delay in ms between movement steps
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();

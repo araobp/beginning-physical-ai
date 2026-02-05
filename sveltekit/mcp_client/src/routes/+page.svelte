@@ -25,6 +25,95 @@
   let targetWorldCoords = $state<{ x: number, y: number } | null>(null);
   let detectedObjects = $state<any[]>([]);
   let visualizeAxes = $state(true);
+
+  // Pick & Place State
+  let ppImage = $state<string | null>(null);
+  let ppCapturing = $state(false);
+  let ppPickPoint = $state<{ u: number, v: number, x: number, y: number, xw: number, yw: number, u_norm: number, v_norm: number } | null>(null);
+  let ppPlacePoint = $state<{ u: number, v: number, x: number, y: number, xw: number, yw: number, u_norm: number, v_norm: number } | null>(null);
+  let ppExecuting = $state(false);
+  let ppPickZ = $state(20);
+  let ppPlaceZ = $state(30);
+  let ppSafetyZ = $state(70);
+  let ppLive = $state(false);
+  let liveInterval: any = null;
+  let joypadLeft = $state({ x: 0, y: 0 });
+  let joypadRight = $state({ x: 0, y: 0 });
+  let currentRobotPos = $state({ x: 0, y: 0, z: 0 });
+  let lastJoypadState = $state<Record<string, any>>({});
+
+  $effect(() => {
+    if (ppPickPoint && ppPlacePoint) {
+      updateServerPoints();
+    }
+  });
+
+  // Language Settings
+  type Lang = 'ja' | 'en';
+  let currentLang = $state<Lang>('ja');
+  
+  const translations = {
+    ja: {
+      title: "最も安い4軸ロボットアーム",
+      tab_tools: "MCPツール",
+      tab_camera: "ロボットの目",
+      tab_control: "ロボット操縦（手動・半自動）",
+      tab_gemini: "ロボット操縦（Gemini）",
+      tab_settings: "設定",
+      loading_tools: "ツールを読み込み中...",
+      error_tools: "ツールの読み込みエラー: ",
+      capture: "撮影",
+      capturing: "撮影中...",
+      detect: "検出",
+      detecting: "検出中...",
+      transform: "座標変換",
+      live: "ライブ",
+      stop_live: "ライブ停止",
+      clear: "クリア",
+      pick_place: "Pick & Place",
+      running: "実行中...",
+      pick_z: "Pick Z (mm)",
+      place_z: "Place Z (mm)",
+      safety_z: "Safety Z (mm)",
+      no_image: "画像がありません",
+      click_live: "'ライブ'をクリックしてPick & Place操作を開始してください",
+      settings_lang: "言語設定",
+      joypad_left: "左",
+      joypad_right: "右",
+      gemini_placeholder: "Gemini Robotics-ER や Gemini Live によるVLA評価画面追加予定"
+    },
+    en: {
+      title: "The Cheapest 4-DoF Robot Arm",
+      tab_tools: "MCP Tools",
+      tab_camera: "Robot Vision",
+      tab_control: "Robot Control (Manual/Semi-Auto)",
+      tab_gemini: "Robot Control (Gemini)",
+      tab_settings: "Settings",
+      loading_tools: "Loading tools...",
+      error_tools: "Error loading tools: ",
+      capture: "Capture",
+      capturing: "Capturing...",
+      detect: "Detect",
+      detecting: "Detecting...",
+      transform: "Transform",
+      live: "Live",
+      stop_live: "Stop Live",
+      clear: "Clear",
+      pick_place: "Pick & Place",
+      running: "Running...",
+      pick_z: "Pick Z (mm)",
+      place_z: "Place Z (mm)",
+      safety_z: "Safety Z (mm)",
+      no_image: "No image captured",
+      click_live: "Click 'Live' to start Pick & Place operation",
+      settings_lang: "Language",
+      joypad_left: "Left",
+      joypad_right: "Right",
+      gemini_placeholder: "Gemini Robotics-ER or Gemini Live VLA evaluation screen coming soon"
+    }
+  };
+
+  let t = $derived(translations[currentLang]);
   
   const boxColors = [
     '#FF3838', // Red
@@ -327,9 +416,6 @@
           if (content.type === 'text') {
             try {
               const coords = JSON.parse(content.text);
-              if (coords.image_jpeg_base64) {
-                cameraImage = `data:image/jpeg;base64,${coords.image_jpeg_base64}`;
-              }
               if (typeof coords.x === 'number') {
                  targetWorldCoords = coords;
                  return;
@@ -371,37 +457,303 @@
     convertImageCoordsToWorld(u, v);
   }
 
+  async function capturePPImage(keepPoints = false) {
+    ppCapturing = true;
+    if (!keepPoints) {
+        ppPickPoint = null;
+        ppPlacePoint = null;
+    }
+    try {
+      const res = await fetch('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'call_tool',
+          name: 'get_live_image',
+          arguments: { visualize_axes: true }
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await res.json();
+      
+      if (result.content && Array.isArray(result.content)) {
+        for (const content of result.content) {
+          if (content.type === 'text') {
+            try {
+              const parsed = JSON.parse(content.text);
+              if (parsed.image_jpeg_base64) {
+                ppImage = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
+                return;
+              }
+            } catch (e) {}
+            if (content.text.startsWith("Error")) {
+               alert(content.text);
+               return;
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      console.error('PP Capture failed:', e);
+      alert(`Error: ${e.message}`);
+    } finally {
+      ppCapturing = false;
+    }
+  }
+
+  async function handlePPImageClick(event: MouseEvent & { currentTarget: HTMLImageElement }) {
+    if (ppExecuting) return;
+    
+    const img = event.currentTarget;
+    const rect = img.getBoundingClientRect();
+    const x_click = event.clientX - rect.left;
+    const y_click = event.clientY - rect.top;
+    
+    let u = Math.floor(x_click * (img.naturalWidth / rect.width));
+    let v = Math.floor(y_click * (img.naturalHeight / rect.height));
+    
+    u = Math.max(0, Math.min(u, img.naturalWidth - 1));
+    v = Math.max(0, Math.min(v, img.naturalHeight - 1));
+
+    const u_norm = u / img.naturalWidth;
+    const v_norm = v / img.naturalHeight;
+
+    try {
+        const res = await fetch('/mcp', {
+            method: 'POST',
+            body: JSON.stringify({
+                type: 'call_tool',
+                name: 'convert_image_coords_to_world',
+                arguments: { u, v }
+            }),
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await res.json();
+
+        if (result.content && Array.isArray(result.content)) {
+            for (const content of result.content) {
+                if (content.type === 'text') {
+                    try {
+                        const coords = JSON.parse(content.text);
+                        if (typeof coords.x === 'number') {
+                            const pt = { 
+                                u, v, 
+                                x: coords.x, y: coords.y, 
+                                xw: coords.xw, yw: coords.yw,
+                                u_norm, v_norm
+                            };
+                            
+                            if (!ppPickPoint) {
+                                ppPickPoint = pt;
+                            } else if (!ppPlacePoint) {
+                                ppPlacePoint = pt;
+                            } else {
+                                ppPickPoint = pt;
+                                ppPlacePoint = null;
+                                clearServerPoints();
+                            }
+                            return;
+                        }
+                    } catch (e) {}
+                    if (content.text.startsWith("Error")) {
+                        alert(content.text);
+                    }
+                }
+            }
+        }
+    } catch (e: any) {
+        console.error('PP Conversion failed:', e);
+        alert(`Error: ${e.message}`);
+    }
+  }
+
+  async function updateServerPoints() {
+    if (!ppPickPoint || !ppPlacePoint) return;
+    try {
+      await fetch('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'call_tool',
+          name: 'set_pick_place_points',
+          arguments: {
+            pick_x: ppPickPoint.x,
+            pick_y: ppPickPoint.y,
+            place_x: ppPlacePoint.x,
+            place_y: ppPlacePoint.y,
+            pick_z: ppPickZ,
+            place_z: ppPlaceZ,
+            safety_z: ppSafetyZ
+          }
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (e) {
+      console.error('Failed to update server points:', e);
+    }
+  }
+
+  async function clearServerPoints() {
+    try {
+      await fetch('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'call_tool',
+          name: 'clear_pick_place_points',
+          arguments: {}
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (e) {
+      console.error('Failed to clear server points:', e);
+    }
+  }
+
+  function clearPPPoints() {
+    ppPickPoint = null;
+    ppPlacePoint = null;
+    clearServerPoints();
+  }
+
+  function toggleLive() {
+    ppLive = !ppLive;
+    if (ppLive) {
+        // ストリーミングURLを設定 (ポート8000)
+        ppImage = `http://${window.location.hostname}:8000/stream.mjpg`;
+    } else {
+        ppImage = null;
+        if (liveInterval) {
+            clearInterval(liveInterval);
+            liveInterval = null;
+        }
+    }
+  }
+
+  async function runPickAndPlace() {
+    if (!ppPickPoint || !ppPlacePoint) return;
+    ppExecuting = true;
+    currentRobotPos = { x: 0, y: 0, z: 0 };
+    
+    const pickZ = Number(ppPickZ ?? 20);
+    const placeZ = Number(ppPlaceZ ?? 30);
+    const safetyZ = Number(ppSafetyZ ?? 70);
+
+    // Sequence from mcp_server.py vision_system.py
+    const cmds = [
+        "grip open",
+        `move z=${safetyZ} s=100`,
+        `move x=${ppPickPoint.xw} y=${ppPickPoint.yw} z=${safetyZ} s=100`,
+        `move z=${pickZ} s=50`,
+        "grip close",
+        "delay t=1000",
+        `move z=${safetyZ} s=100`,
+        `move x=${ppPlacePoint.xw} y=${ppPlacePoint.yw} z=${safetyZ} s=100`,
+        `move z=${placeZ} s=50`,
+        "grip open",
+        "delay t=1000",
+        `move z=${safetyZ} s=100`,
+        "move x=110 y=0 z=70 s=50"
+    ];
+
+    try {
+        for (const cmd of cmds) {
+            const res = await fetch('/mcp', {
+                method: 'POST',
+                body: JSON.stringify({
+                    type: 'call_tool',
+                    name: 'execute_sequence',
+                    arguments: { commands: cmd }
+                }),
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const result = await res.json();
+            console.log(`Cmd: ${cmd}, Result:`, result);
+            
+        }
+    } catch (e: any) {
+        console.error('P&P Execution failed:', e);
+        alert(`Error: ${e.message}`);
+    } finally {
+        ppExecuting = false;
+        joypadLeft = { x: 0, y: 0 };
+        joypadRight = { x: 0, y: 0 };
+    }
+  }
+
+  async function executeSingleCommand(cmd: string) {
+    try {
+      await fetch('/mcp', {
+          method: 'POST',
+          body: JSON.stringify({
+              type: 'call_tool',
+              name: 'execute_sequence',
+              arguments: { commands: cmd }
+          }),
+          headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (e) {
+      console.error(`Failed to execute command: ${cmd}`, e);
+    }
+  }
+
   onMount(() => {
     const sse = new EventSource('/mcp');
     sse.onmessage = (e) => console.log("SSE:", e.data);
     
-    loadTools();
+    (async () => {
+      await loadTools();
+      await executeSingleCommand("move x=110 y=0 z=70 s=50");
 
-    // Load TensorFlow.js and then COCO-SSD model to ensure correct dependency order
-    const tfScript = document.createElement('script');
-    tfScript.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs';
-    tfScript.async = true;
+      // Load TensorFlow.js and then COCO-SSD model to ensure correct dependency order
+      const tfScript = document.createElement('script');
+      tfScript.src = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs';
+      tfScript.async = true;
 
-    tfScript.onload = () => {
-      const cocoSsdScript = document.createElement('script');
-      cocoSsdScript.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd';
-      cocoSsdScript.async = true;
-      cocoSsdScript.onload = () => {
-        tfReady = true;
+      tfScript.onload = () => {
+        const cocoSsdScript = document.createElement('script');
+        cocoSsdScript.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd';
+        cocoSsdScript.async = true;
+        cocoSsdScript.onload = () => {
+          tfReady = true;
+        };
+        document.head.appendChild(cocoSsdScript);
       };
-      document.head.appendChild(cocoSsdScript);
-    };
 
-    document.head.appendChild(tfScript);
+      document.head.appendChild(tfScript);
+    })();
+
+    const joypadInterval = setInterval(async () => {
+      if (ppExecuting) return;
+      try {
+        const res = await fetch('/mcp', {
+          method: 'POST',
+          body: JSON.stringify({
+            type: 'call_tool',
+            name: 'get_joypad_state',
+            arguments: {}
+          }),
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await res.json();
+        if (result.content && Array.isArray(result.content)) {
+          const text = result.content.find((c: any) => c.type === 'text')?.text;
+          if (text) {
+            const state = JSON.parse(text);
+            const scale = 15 / 128; // UI scale factor
+            joypadLeft = { x: (state.X ?? 0) * scale, y: (state.Y ?? 0) * scale };
+            joypadRight = { x: (state.RX ?? 0) * scale, y: (state.RY ?? 0) * scale };
+          }
+        }
+      } catch (e) {}
+    }, 100);
 
     return () => {
       sse.close();
+      clearInterval(joypadInterval);
     };
   });
 </script>
 
 <svelte:head>
-  <title>おもちゃのロボットアーム向けMCPクライアント</title>
+  <title>{t.title}</title>
   <link
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
     rel="stylesheet"
@@ -412,61 +764,235 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
 </svelte:head>
 
-<main class="container mt-5">
-  <div class="mt-5">
-    <h2>おもちゃのロボットアーム向けMCPクライアント</h2>
+<main class="container mt-3">
+  <div>
+    <h2>{t.title}</h2>
     <ul class="nav nav-tabs mt-3" id="myTab" role="tablist">
       <li class="nav-item" role="presentation">
         <button
           class="nav-link active"
-          id="home-tab"
-          data-bs-toggle="tab"
-          data-bs-target="#home-tab-pane"
-          type="button"
-          role="tab"
-          aria-controls="home-tab-pane"
-          aria-selected="true">MCPツール</button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button
-          class="nav-link"
           id="camera-tab"
           data-bs-toggle="tab"
           data-bs-target="#camera-tab-pane"
           type="button"
           role="tab"
           aria-controls="camera-tab-pane"
-          aria-selected="false">ロボットの目</button>
+          aria-selected="true">{t.tab_camera}</button>
       </li>
       <li class="nav-item" role="presentation">
         <button
           class="nav-link"
-          id="chat-tab"
+          id="pp-tab"
           data-bs-toggle="tab"
-          data-bs-target="#chat-tab-pane"
+          data-bs-target="#pp-tab-pane"
           type="button"
           role="tab"
-          aria-controls="chat-tab-pane"
-          aria-selected="false">Chat</button>
+          aria-controls="pp-tab-pane"
+          aria-selected="false">{t.tab_control}</button>
       </li>
       <li class="nav-item" role="presentation">
         <button
           class="nav-link"
-          id="live-tab"
+          id="gemini-tab"
           data-bs-toggle="tab"
-          data-bs-target="#live-tab-pane"
+          data-bs-target="#gemini-tab-pane"
           type="button"
           role="tab"
-          aria-controls="live-tab-pane"
-          aria-selected="false">Live</button>
+          aria-controls="gemini-tab-pane"
+          aria-selected="false">{t.tab_gemini}</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          id="home-tab"
+          data-bs-toggle="tab"
+          data-bs-target="#home-tab-pane"
+          type="button"
+          role="tab"
+          aria-controls="home-tab-pane"
+          aria-selected="false">{t.tab_tools}</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          id="settings-tab"
+          data-bs-toggle="tab"
+          data-bs-target="#settings-tab-pane"
+          type="button"
+          role="tab"
+          aria-controls="settings-tab-pane"
+          aria-selected="false">{t.tab_settings}</button>
       </li>
     </ul>
     <div class="tab-content p-3 border border-top-0 rounded-bottom" id="myTabContent">
-      <div class="tab-pane fade show active" id="home-tab-pane" role="tabpanel" aria-labelledby="home-tab" tabindex="0">
+      <div class="tab-pane fade show active" id="camera-tab-pane" role="tabpanel" aria-labelledby="camera-tab" tabindex="0">
+        <div class="d-flex flex-column align-items-center mt-3">
+          <div class="mb-3 d-flex gap-2 align-items-center">
+            <select class="form-select w-auto" bind:value={detectionModel}>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
+              <option value="tensorflow.js">tensorflow.js</option>
+            </select>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="visualizeAxesCheck" bind:checked={visualizeAxes}>
+              <label class="form-check-label" for="visualizeAxesCheck">Axes</label>
+            </div>
+            <button class="btn btn-primary" onclick={captureImage} disabled={capturing}>
+              {capturing ? t.capturing : t.capture}
+            </button>
+            <button
+              class="btn btn-primary"
+              onclick={detectObjects}
+              disabled={detecting || (detectionModel === 'tensorflow.js' && !tfReady)}
+            >
+              {#if detecting}{t.detecting}
+              {:else if detectionModel === 'tensorflow.js' && !tfReady}Loading TF.js...
+              {:else}{t.detect}{/if}
+            </button>
+            <button class="btn btn-primary" onclick={transformAllObjects} disabled={detectedObjects.length === 0}>
+              {t.transform}
+            </button>
+          </div>
+          {#if cameraImage}
+            <div class="position-relative d-inline-block">
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <img src={cameraImage} alt="Robot Camera View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handleImageClick} />
+              {#each detectedObjects as obj, i}
+                {@const color = getColorForIndex(i)}
+                <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none;">
+                  <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
+                </div>
+                {@const groundContactX = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[1] / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
+                {@const groundContactY = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[0] / 10 : obj.box_2d[2] / 10}
+                <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;"></div>
+                <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 10;">
+                    {#if obj.imageCoords}
+                        <div style="background: rgba(0,0,0,0.7); color: white; padding: 2px 5px; border-radius: 3px; font-size: 0.7em; font-family: monospace; white-space: nowrap;">
+                            <div>u: {obj.imageCoords.u}, v: {obj.imageCoords.v} (px)</div>
+                            {#if obj.worldCoords}
+                                <div>x: {obj.worldCoords.x.toFixed(1)}, y: {obj.worldCoords.y.toFixed(1)} (mm)</div>
+                            {/if}
+                        </div>
+                    {/if}
+                </div>
+              {/each}
+              {#if targetMarker}
+                <div style="position: absolute; left: {targetMarker.x}px; top: {targetMarker.y}px; width: 0; height: 0; pointer-events: none;">
+                  <div style="position: absolute; width: 20px; height: 20px; border: 2px solid red; border-radius: 50%; transform: translate(-50%, -50%);"></div>
+                  <span style="position: absolute; left: 15px; top: -12px; color: red; font-weight: bold; text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.5); white-space: nowrap;">TARGET</span>
+                </div>
+              {/if}
+              {#if targetImageCoords}
+                <div style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 4px; pointer-events: none; font-family: monospace;">
+                  <div>u: {targetImageCoords.u}, v: {targetImageCoords.v} (px)</div>
+                  {#if targetWorldCoords}
+                    <div>x: {targetWorldCoords.x.toFixed(1)}, y: {targetWorldCoords.y.toFixed(1)} (mm)</div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {:else}
+            <div class="text-muted p-5 border rounded bg-light">
+              {t.no_image}
+            </div>
+          {/if}
+        </div>
+      </div>
+      <div class="tab-pane fade" id="pp-tab-pane" role="tabpanel" aria-labelledby="pp-tab" tabindex="0">
+        <div class="d-flex flex-column align-items-center mt-3">
+          <div class="mb-3 d-flex gap-2 align-items-center flex-wrap justify-content-center">
+            <button class="btn {ppLive ? 'btn-danger' : 'btn-outline-danger'}" onclick={toggleLive}>
+              {ppLive ? t.stop_live : t.live}
+            </button>
+            <button class="btn btn-secondary" onclick={clearPPPoints} disabled={ppExecuting}>
+              {t.clear}
+            </button>
+            <button class="btn btn-success" onclick={runPickAndPlace} disabled={!ppPickPoint || !ppPlacePoint || ppExecuting}>
+              {ppExecuting ? t.running : t.pick_place}
+            </button>
+            
+            <div class="input-group input-group-sm" style="width: auto;">
+                <span class="input-group-text">{t.pick_z}</span>
+                <input type="number" class="form-control" style="width: 70px;" bind:value={ppPickZ}>
+            </div>
+            <div class="input-group input-group-sm" style="width: auto;">
+                <span class="input-group-text">{t.place_z}</span>
+                <input type="number" class="form-control" style="width: 70px;" bind:value={ppPlaceZ}>
+            </div>
+            <div class="input-group input-group-sm" style="width: auto;">
+                <span class="input-group-text">{t.safety_z}</span>
+                <input type="number" class="form-control" style="width: 70px;" bind:value={ppSafetyZ}>
+            </div>
+          </div>
+          
+          {#if ppImage}
+            <div class="position-relative d-inline-block">
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <img src={ppImage} alt="Pick & Place View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handlePPImageClick} />
+              
+              {#if ppPickPoint}
+                {@const pt = ppPickPoint}
+                <div style="position: absolute; left: {pt.u_norm * 100}%; top: {pt.v_norm * 100}%; transform: translate(-50%, -50%); pointer-events: none;">
+                    <div style="width: 10px; height: 10px; background: purple; border-radius: 50%;"></div>
+                    <div style="position: absolute; top: -10px; left: 15px; background: rgba(0,0,0,0.5); color: white; padding: 4px; border-radius: 4px; font-size: 0.8em; white-space: nowrap;">
+                        <div style="font-weight: bold; color: #d0a0ff;">Pick</div>
+                        <div>u:{pt.u}, v:{pt.v}</div>
+                        <div>x:{pt.x.toFixed(1)}, y:{pt.y.toFixed(1)}</div>
+                        <div>xw:{pt.xw.toFixed(1)}, yw:{pt.yw.toFixed(1)}</div>
+                    </div>
+                </div>
+              {/if}
+
+              {#if ppPlacePoint}
+                {@const pt = ppPlacePoint}
+                <div style="position: absolute; left: {pt.u_norm * 100}%; top: {pt.v_norm * 100}%; transform: translate(-50%, -50%); pointer-events: none;">
+                    <div style="width: 10px; height: 10px; background: blue; border-radius: 50%;"></div>
+                    <div style="position: absolute; top: -10px; left: 15px; background: rgba(0,0,0,0.5); color: white; padding: 4px; border-radius: 4px; font-size: 0.8em; white-space: nowrap;">
+                        <div style="font-weight: bold; color: #a0a0ff;">Place</div>
+                        <div>u:{pt.u}, v:{pt.v}</div>
+                        <div>x:{pt.x.toFixed(1)}, y:{pt.y.toFixed(1)}</div>
+                        <div>xw:{pt.xw.toFixed(1)}, yw:{pt.yw.toFixed(1)}</div>
+                    </div>
+                </div>
+              {/if}
+            </div>
+          {:else}
+            <div class="text-muted p-5 border rounded bg-light">
+              {t.click_live}
+            </div>
+          {/if}
+          
+          <!-- Joypad Visualization -->
+          <div class="d-flex flex-column align-items-center mt-3 mb-3 p-2 border rounded bg-light">
+            <div class="d-flex gap-4 justify-content-center">
+                <div class="joypad-stick">
+                    <div class="stick-label">{t.joypad_left}</div>
+                    <div class="stick-base">
+                        <div class="stick-knob" style="transform: translate({joypadLeft.x}px, {joypadLeft.y}px)"></div>
+                    </div>
+                </div>
+                <div class="joypad-stick">
+                    <div class="stick-label">{t.joypad_right}</div>
+                    <div class="stick-base">
+                        <div class="stick-knob" style="transform: translate({joypadRight.x}px, {joypadRight.y}px)"></div>
+                    </div>
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tab-pane fade" id="gemini-tab-pane" role="tabpanel" aria-labelledby="gemini-tab" tabindex="0">
+        <div class="p-5 text-center text-muted">
+          <h4>{t.gemini_placeholder}</h4>
+        </div>
+      </div>
+      <div class="tab-pane fade" id="home-tab-pane" role="tabpanel" aria-labelledby="home-tab" tabindex="0">
         {#if error}
-          <div class="alert alert-danger" role="alert">Error loading tools: {error}</div>
+          <div class="alert alert-danger" role="alert">{t.error_tools}{error}</div>
         {:else if tools.length === 0}
-          <p>Loading tools...</p>
+          <p>{t.loading_tools}</p>
         {:else}
           <div class="list-group">
             {#each tools as tool}
@@ -488,85 +1014,16 @@
           </div>
         {/if}
       </div>
-      <div class="tab-pane fade" id="camera-tab-pane" role="tabpanel" aria-labelledby="camera-tab" tabindex="0">
-        <div class="d-flex flex-column align-items-center mt-3">
-          <div class="mb-3 d-flex gap-2 align-items-center">
-            <select class="form-select w-auto" bind:value={detectionModel}>
-              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-              <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
-              <option value="tensorflow.js">tensorflow.js</option>
+      <div class="tab-pane fade" id="settings-tab-pane" role="tabpanel" aria-labelledby="settings-tab" tabindex="0">
+        <div class="p-3">
+          <div class="mb-3">
+            <label for="langSelect" class="form-label">{t.settings_lang}</label>
+            <select class="form-select w-auto" id="langSelect" bind:value={currentLang}>
+              <option value="ja">日本語</option>
+              <option value="en">English</option>
             </select>
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" id="visualizeAxesCheck" bind:checked={visualizeAxes}>
-              <label class="form-check-label" for="visualizeAxesCheck">Axes</label>
-            </div>
-            <button class="btn btn-primary" onclick={captureImage} disabled={capturing}>
-              {capturing ? 'Capturing...' : 'Capture'}
-            </button>
-            <button
-              class="btn btn-primary"
-              onclick={detectObjects}
-              disabled={detecting || (detectionModel === 'tensorflow.js' && !tfReady)}
-            >
-              {#if detecting}Detecting...
-              {:else if detectionModel === 'tensorflow.js' && !tfReady}Loading TF.js...
-              {:else}Detect{/if}
-            </button>
-            <button class="btn btn-primary" onclick={transformAllObjects} disabled={detectedObjects.length === 0}>
-              Transform
-            </button>
           </div>
-          {#if cameraImage}
-            <div class="position-relative d-inline-block">
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-              <img src={cameraImage} alt="Robot Camera View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handleImageClick} />
-              {#each detectedObjects as obj, i}
-                {@const color = getColorForIndex(i)}
-                <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none;">
-                  <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
-                </div>
-                {@const groundContactX = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[1] / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
-                {@const groundContactY = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[0] / 10 : obj.box_2d[2] / 10}
-                <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;"></div>
-                <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 10;">
-                    {#if obj.imageCoords}
-                        <div style="background: rgba(0,0,0,0.7); color: white; padding: 2px 5px; border-radius: 3px; font-size: 0.7em; font-family: monospace; white-space: nowrap;">
-                            <div>u: {obj.imageCoords.u}, v: {obj.imageCoords.v} (px)</div>
-                            {#if obj.worldCoords}
-                                <div>x: {obj.worldCoords.x.toFixed(1)}, y: {obj.worldCoords.y.toFixed(1)} (cm)</div>
-                            {/if}
-                        </div>
-                    {/if}
-                </div>
-              {/each}
-              {#if targetMarker}
-                <div style="position: absolute; left: {targetMarker.x}px; top: {targetMarker.y}px; width: 0; height: 0; pointer-events: none;">
-                  <div style="position: absolute; width: 20px; height: 20px; border: 2px solid red; border-radius: 50%; transform: translate(-50%, -50%);"></div>
-                  <span style="position: absolute; left: 15px; top: -12px; color: red; font-weight: bold; text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.5); white-space: nowrap;">TARGET</span>
-                </div>
-              {/if}
-              {#if targetImageCoords}
-                <div style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 4px; pointer-events: none; font-family: monospace;">
-                  <div>u: {targetImageCoords.u}, v: {targetImageCoords.v} (px)</div>
-                  {#if targetWorldCoords}
-                    <div>x: {targetWorldCoords.x.toFixed(1)}, y: {targetWorldCoords.y.toFixed(1)} (cm)</div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {:else}
-            <div class="text-muted p-5 border rounded bg-light">
-              No image captured
-            </div>
-          {/if}
         </div>
-      </div>
-      <div class="tab-pane fade" id="chat-tab-pane" role="tabpanel" aria-labelledby="chat-tab" tabindex="0">
-        <p>This is the content for the Chat tab.</p>
-      </div>
-      <div class="tab-pane fade" id="live-tab-pane" role="tabpanel" aria-labelledby="live-tab" tabindex="0">
-        <p>This is the content for the Live tab.</p>
       </div>
     </div>
   </div>
@@ -626,3 +1083,34 @@
     </div>
   </div>
 </main>
+
+<style>
+    .joypad-stick {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    .stick-label {
+        font-size: 0.8rem;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+    .stick-base {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background-color: #ddd;
+        border: 2px solid #bbb;
+        position: relative;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    .stick-knob {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-color: #555;
+        transition: transform 0.2s ease;
+    }
+</style>

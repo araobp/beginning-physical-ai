@@ -10,14 +10,37 @@ from fastmcp import FastMCP
 import serial
 import serial.tools.list_ports
 import time
+import sys
 import json
 import base64
 import cv2
 import re
-import sys
 import queue
+import argparse
 import threading
+import http.server
+import socketserver
 from vision_system import VisionSystem
+try:
+    from joypad import get_joypad_system
+except ImportError:
+    print("Warning: 'joypad' module not found or 'hid' library missing. Joypad support disabled.")
+    get_joypad_system = None
+try:
+    from calibration_gui import CalibrationGUI
+except ImportError:
+    print("Warning: 'calibration_gui' module not found.")
+    CalibrationGUI = None
+
+# --- 言語設定 (引数解析前に簡易チェック) ---
+LANG = 'ja'
+if '--lang' in sys.argv:
+    try:
+        idx = sys.argv.index('--lang')
+        if idx + 1 < len(sys.argv):
+            LANG = sys.argv[idx + 1]
+    except:
+        pass
 
 # --- 基本設定 ---
 # ロボットアーム（Arduino）が接続されているシリアルポート
@@ -48,22 +71,25 @@ SERIAL_PORT = detect_serial_port()
 BAUD_RATE = 9600
 # コマンド応答のタイムアウト（秒）
 TIMEOUT = 45
+# 送信コマンドをコンソールに出力するかどうか
+VERBOSE_SERIAL = True
 
 # --- ビジョンシステム設定 ---
 # カメラキャリブレーションによって得られた内部パラメータファイル
 CAMERA_PARAMS_PATH = '../vision/chessboard/calibration_data.npz'
 # 座標系の原点として使用するArUcoマーカーのID
 ARUCO_MARKER_ID = 14
-# ArUcoマーカーの物理的な一辺の長さ (cm)
-ARUCO_MARKER_SIZE_CM = 6.3
+# ArUcoマーカーの物理的な一辺の長さ (mm)
+ARUCO_MARKER_SIZE_MM = 63.0
 # 使用するカメラのデバイスID
 CAMERA_ID = 0
 
-# ロボットベースのオフセット設定 (cm)
-# ビジョン座標系(ArUco原点)からロボットベース座標系への変換
-# カッティングマットの15cmの位置へロボットのベース前方を密着させた場合の調整値
-ROBOT_BASE_OFFSET_X = -14 - 5.5
-ROBOT_BASE_OFFSET_Y = -10.0
+# ロボットベースのオフセット設定 (mm)
+# マーカー座標系(ArUco原点)からロボットベース座標系への変換
+# カッティングマットの150mmの位置へロボットのベース前方を密着させた場合の調整値
+# マーカー座標系の原点(x=0, y=0)は、世界座標系では X=196mm, Y=100mm となるため、オフセットは正の値(mm)となります。
+ROBOT_BASE_OFFSET_X = 140.0 + 56.0
+ROBOT_BASE_OFFSET_Y = 100.0
 
 mcp = FastMCP(
     "RobotArmController"
@@ -73,6 +99,7 @@ mcp = FastMCP(
 # VisionSystemとシリアル接続は、必要になるまで初期化しない（遅延初期化）
 _vision_system = None
 _serial_conn = None
+_serial_lock = threading.Lock() # シリアル通信の排他制御用ロック
 
 # GUI起動リクエスト用のキュー (macOSでのOpenCVスレッド制約対策)
 gui_queue = queue.Queue()
@@ -80,20 +107,36 @@ gui_queue = queue.Queue()
 # --- 内部ヘルパー関数 ---
 def _fetch_workpiece_data():
     """作業対象物（ワーク）の定義情報を返す"""
-    return {
-        "earplug_case": {
-            "name": "耳栓ケース",
-            "height": 43.0,
-            "approach_z_offset": 50.0,
-            "description": "円筒形のケース。Z=20で把持し、移動は安全高度 Z=93 (43+50) を経由してください。"
-        },
-        "base_tray": {
-            "name": "配置トレイ",
-            "height": 5.0,
-            "approach_z_offset": 60.0,
-            "description": "配置用の平坦な面。Z=5で解放、Z=65で移動してください。"
+    if LANG == 'en':
+        return {
+            "earplug_case": {
+                "name": "Earplug Case",
+                "height": 43.0,
+                "approach_z_offset": 50.0,
+                "description": "Cylindrical case. Grip at Z=20, move via safety height Z=93 (43+50)."
+            },
+            "base_tray": {
+                "name": "Base Tray",
+                "height": 5.0,
+                "approach_z_offset": 60.0,
+                "description": "Flat tray for placement. Release at Z=5, move at Z=65."
+            }
         }
-    }
+    else:
+        return {
+            "earplug_case": {
+                "name": "耳栓ケース",
+                "height": 43.0,
+                "approach_z_offset": 50.0,
+                "description": "円筒形のケース。Z=20で把持し、移動は安全高度 Z=93 (43+50) を経由してください。"
+            },
+            "base_tray": {
+                "name": "配置トレイ",
+                "height": 5.0,
+                "approach_z_offset": 60.0,
+                "description": "配置用の平坦な面。Z=5で解放、Z=65で移動してください。"
+            }
+        }
 
 def get_vision_system():
     """
@@ -106,10 +149,11 @@ def get_vision_system():
             _vision_system = VisionSystem(
                 camera_params_path=CAMERA_PARAMS_PATH,
                 marker_id=ARUCO_MARKER_ID,
-                marker_size_cm=ARUCO_MARKER_SIZE_CM,
+                marker_size_mm=ARUCO_MARKER_SIZE_MM,
                 cam_id=CAMERA_ID,
-                robot_offset_x=ROBOT_BASE_OFFSET_X,
-                robot_offset_y=ROBOT_BASE_OFFSET_Y
+                robot_offset_x_mm=ROBOT_BASE_OFFSET_X,
+                robot_offset_y_mm=ROBOT_BASE_OFFSET_Y,
+                lang=LANG
             )
             print("Vision system initialized successfully.")
         except Exception as e:
@@ -143,31 +187,95 @@ def send_command(cmd: str) -> str:
     2. Arduinoからの応答を一行ずつ読み込む。
     3. 応答の最後にプロンプト文字 '%' が送られてきたら、コマンド完了とみなす。
     """
-    conn = get_serial()
-    if not conn: return "Error: ロボットに接続できません。"
-    try:
-        full_cmd = cmd.strip() + "\n"
-        conn.write(full_cmd.encode('utf-8'))
-        response = []
-        while True:
-            line = conn.readline().decode('utf-8', errors='replace').strip()
-            # コマンド完了の合図
-            if line == '%': break
-            # タイムアウト（readlineが空文字を返す）かつバッファが空の場合、ループを抜ける
-            if not line and conn.in_waiting == 0: break
-            if line: response.append(line)
-        return "\n".join(response) if response else "Success"
-    except Exception as e:
-        return f"Error: {e}"
+    if VERBOSE_SERIAL:
+        print(f"[Serial] -> {cmd}")
+
+    with _serial_lock:
+        conn = get_serial()
+        if not conn: return "Error: Cannot connect to robot." if LANG == 'en' else "Error: ロボットに接続できません。"
+        try:
+            full_cmd = cmd.strip() + "\n"
+            conn.write(full_cmd.encode('utf-8'))
+            response = []
+            while True:
+                line = conn.readline().decode('utf-8', errors='replace').strip()
+                # コマンド完了の合図
+                if line == '%': break
+                # タイムアウト（readlineが空文字を返す）かつバッファが空の場合、ループを抜ける
+                if not line and conn.in_waiting == 0: break
+                if line: response.append(line)
+            return "\n".join(response) if response else "Success"
+        except Exception as e:
+            return f"Error: {e}"
 
 # =================================================================
 # MCPツール群 (AIエージェントが利用するAPI)
 # docstring（ここの説明文）が、AIの思考と行動の源泉となります。
 # =================================================================
 
-@mcp.tool()
-def get_workpiece_catalog() -> str:
-    """
+def set_doc(docstring):
+    def decorator(func):
+        func.__doc__ = docstring
+        return func
+    return decorator
+
+TOOL_DOCS = {
+    'en': {
+        'get_workpiece_catalog': """
+    Retrieves the catalog (physical properties list) of all workpieces registered in the system.
+    Returns a JSON string.
+
+    [Instructions for AI]
+    When planning to manipulate objects (e.g., pick and place), **always execute this tool first** to understand the exact "height" and "approach_z_offset" to avoid collisions.
+
+    [Data Structure Details]
+    - name: Name of the workpiece.
+    - height: Physical height of the workpiece (mm). Reference point for lowering the arm.
+    - approach_z_offset: Safety margin (mm) for horizontal movement above the workpiece.
+    - description: Supplementary information.
+
+    [Important: Formula for Safe Path Planning]
+    When moving horizontally with a workpiece, always raise the arm to the "Safety Height" calculated as:
+    Safety Height (Z) = workpiece height + approach_z_offset
+    """,
+        'execute_sequence': """
+    Sends a sequence of operations (command sequence) separated by semicolons ';' to the robot arm.
+
+    [Command Syntax]
+    1. move x=<val> y=<val> z=<val> s=<speed>:
+       Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm).
+       s is the speed, range 0-100.
+    2. grip <open|close>:
+       Opens or closes the gripper.
+    3. delay t=<ms>:
+       Pauses for the specified time (milliseconds). Use to wait for physical stability.
+
+    [Rules for AI Controller]
+    - **Insert Delays**: Always insert 'delay t=1000' after 'grip close' or 'grip open'.
+    - **Use Safety Height**: Before horizontal movement, calculate safety height using `get_workpiece_catalog`.
+    - **Collision Avoidance**: Always raise to safety height before moving horizontally after gripping.
+    """,
+        'execute_sequence_marker_coords': """
+    Executes a command sequence described in the Marker Coordinate System (ArUco marker origin).
+    Automatically adds offsets to convert to Robot Base Coordinates.
+
+    [Coordinate Transformation]
+    x_world = x_marker + ROBOT_BASE_OFFSET_X
+    y_world = y_marker + ROBOT_BASE_OFFSET_Y
+    Z coordinates are unchanged.
+
+    Args:
+        commands (str): Semicolon-separated commands. e.g., "move x=0 y=0 z=50 s=50; grip close"
+    """,
+        'get_robot_status': "Retrieves the current status of the robot arm (TCP coordinates, joint angles, etc.). Use this to understand the arm's current position before planning movements.",
+        'get_joypad_state': "Retrieves the current input state (axis values) of the joypad. Returns JSON: {'X': float, 'Y': float, 'RX': float, 'RY': float}",
+        'get_live_image': "Captures a single undistorted live frame from the camera and returns it as a Base64 encoded JPEG. Used to visually confirm the current status of the robot's workspace. If a reference marker is detected, 3D axes are overlaid. Returns JSON `{'image_jpeg_base64': '...'}`. Args: visualize_axes (bool): If True, draws coordinate axes.",
+        'convert_image_coords_to_world': "Converts pixel coordinates (u, v) from the undistorted image to real-world coordinates (x, y) [mm] on the robot's working plane (Z=0). Essential for converting user clicks on the image to physical coordinates for the robot. Prerequisites: ArUco marker must be visible. Args: u (int), v (int). Returns JSON with x, y (marker coords), xw, yw (robot coords).",
+        'set_pick_place_points': "Sets Pick/Place positions and Z heights (pick, place, safety) in the VisionSystem to enable trajectory drawing. Coordinates are in Marker Coordinate System (mm).",
+        'clear_pick_place_points': "Clears Pick/Place positions set in the VisionSystem and disables trajectory drawing."
+    },
+    'ja': {
+        'get_workpiece_catalog': """
     システムに登録されている全てのワーク（作業対象物）のカタログ（物理特性リスト）を取得します。
     JSON形式の文字列で返されます。
 
@@ -185,12 +293,8 @@ def get_workpiece_catalog() -> str:
     【重要：安全な経路計画のための計算式】
     ワークを持った状態で水平移動を行う際は、必ず以下の式で算出される「安全高度」までアームを上昇させてください。
     安全高度 (Z座標) = ワークの height + approach_z_offset
-    """
-    return json.dumps(_fetch_workpiece_data(), ensure_ascii=False, indent=2)
-
-@mcp.tool()
-def execute_sequence(commands: str) -> str:
-    """
+    """,
+        'execute_sequence': """
     ロボットアームに一連の動作（コマンドシーケンス）をセミコロン ';' 区切りで送信します。
 
     【コマンド文法】
@@ -206,28 +310,88 @@ def execute_sequence(commands: str) -> str:
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
     - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください (安全高度 = height + approach_z_offset)。
     - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。低い高度のまま直線的に移動すると、他の物体と衝突する危険があります。
-    """
-    return send_command(commands)
+    """,
+        'execute_sequence_marker_coords': """
+    ArUcoマーカーを原点とするマーカー座標系で記述されたコマンドシーケンスを実行します。
+    指定された座標(mm)に対して、自動的にロボットベース座標系へのオフセットを加算して実行します。
+    
+    【座標変換】
+    入力された x, y (mm) に対して、システム設定のオフセット(mm)を加算します。
+    Args:
+        commands (str): セミコロン区切りのコマンド列。
+                        例: "move x=0 y=0 z=50 s=50; grip close"
+    """,
+        'get_robot_status': "ロボットアームの現在の状態（TCP座標、各関節の角度など）を取得します。\n動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。",
+        'get_joypad_state': "現在のジョイパッドの入力状態（各軸の値）を取得します。\n戻り値 (JSON): {\"X\": float, \"Y\": float, \"RX\": float, \"RY\": float}",
+        'get_live_image': "カメラから歪み補正済みのライブ映像を1フレームキャプチャし、Base64エンコードされたJPEG形式で返します。\nこの画像は、ロボットの作業領域の現在の状況を視覚的に確認するために使用します。\n基準マーカーが検出されている場合は、画像の座標系を示す3D軸が重畳描画されます。\n返り値は `{\"image_jpeg_base64\": \"...\"}` という形式のJSON文字列です。\n\nArgs:\n    visualize_axes (bool): Trueの場合、画像に座標軸を描画します。",
+        'convert_image_coords_to_world': "歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の\n実世界座標(x, y) [mm] に変換します。\nこのツールは、画像上でユーザーがクリックした点などを、ロボットが目標とすべき物理座標に変換するために不可欠です。\n\n【前提条件】\n- この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。\n- マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。\n\nArgs:\n    u (int): 変換したい画像の水平方向（横軸）のピクセル座標。\n    v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。\n\nReturns:\n    変換に成功した場合: `{\"x\": float, \"y\": float, \"z\": 0.0, \"xw\": float, \"yw\": float}` という形式のJSON文字列。\n    - x, y: マーカー座標系（マーカー原点）での座標 (mm)\n    - xw, yw: ロボットベース座標系での座標 (mm)。アーム操作(execute_sequence)にはこの値を使用してください。\n    変換に失敗した場合: 失敗理由を示すエラーメッセージ文字列。",
+        'set_pick_place_points': "VisionSystemにPick位置とPlace位置を設定し、ストリーミング映像への軌道描画を有効にします。\n座標はマーカー座標系(mm)です。",
+        'clear_pick_place_points': "VisionSystemに設定されたPick/Place位置をクリアし、軌道描画を無効にします。"
+    }
+}
+
+DOCS = TOOL_DOCS[LANG]
 
 @mcp.tool()
+@set_doc(DOCS['get_workpiece_catalog'])
+def get_workpiece_catalog() -> str:
+    return json.dumps(_fetch_workpiece_data(), ensure_ascii=False, indent=2)
+
+@mcp.tool()
+@set_doc(DOCS['execute_sequence'])
+def execute_sequence(commands: str) -> str:
+    return send_command(commands)
+
+def _transform_marker_to_world_cmd(cmd: str) -> str:
+    """
+    マーカー座標系のmoveコマンドを世界座標系に変換するヘルパー関数
+    """
+    cmd = cmd.strip()
+    if not cmd.startswith("move"):
+        return cmd
+    
+    def replace_val(match, offset_mm):
+        try:
+            val = float(match.group(1))
+            # オフセット(mm)を加算
+            new_val = val + offset_mm
+            return f"{match.group(0)[0]}={new_val:.2f}"
+        except ValueError:
+            return match.group(0)
+
+    # x=値 を置換
+    cmd = re.sub(r'x=([-+]?\d*\.?\d+)', lambda m: replace_val(m, ROBOT_BASE_OFFSET_X), cmd)
+    # y=値 を置換
+    cmd = re.sub(r'y=([-+]?\d*\.?\d+)', lambda m: replace_val(m, ROBOT_BASE_OFFSET_Y), cmd)
+    
+    return cmd
+
+@mcp.tool()
+@set_doc(DOCS['execute_sequence_marker_coords'])
+def execute_sequence_marker_coords(commands: str) -> str:
+    cmd_list = commands.split(';')
+    converted_cmds = []
+    for cmd in cmd_list:
+        if not cmd.strip(): continue
+        converted_cmds.append(_transform_marker_to_world_cmd(cmd))
+    
+    full_sequence = ";".join(converted_cmds)
+    print(f"[Marker->World] {commands} -> {full_sequence}")
+    return send_command(full_sequence)
+
+@mcp.tool()
+@set_doc(DOCS['get_robot_status'])
 def get_robot_status() -> str:
-    """
-    ロボットアームの現在の状態（TCP座標、各関節の角度など）を取得します。
-    動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。
-    """
     return send_command("dump")
 
 @mcp.tool()
-def get_live_image(visualize_axes: bool = True) -> str:
-    """
-    カメラから歪み補正済みのライブ映像を1フレームキャプチャし、Base64エンコードされたJPEG形式で返します。
-    この画像は、ロボットの作業領域の現在の状況を視覚的に確認するために使用します。
-    基準マーカーが検出されている場合は、画像の座標系を示す3D軸が重畳描画されます。
-    返り値は `{"image_jpeg_base64": "..."}` という形式のJSON文字列です。
+@set_doc(DOCS['get_joypad_state'])
+def get_joypad_state() -> str:
+    return json.dumps(joypad_axis_values)
 
-    Args:
-        visualize_axes (bool): Trueの場合、画像に座標軸を描画します。
-    """
+@mcp.tool()
+@set_doc(DOCS['get_live_image'])
+def get_live_image(visualize_axes: bool = True) -> str:
     vs = get_vision_system()
     if not vs:
         return "Error: Vision system is not available."
@@ -242,27 +406,8 @@ def get_live_image(visualize_axes: bool = True) -> str:
         return "Error: Failed to capture image from camera."
 
 @mcp.tool()
+@set_doc(DOCS['convert_image_coords_to_world'])
 def convert_image_coords_to_world(u: int, v: int) -> str:
-    """
-    歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の
-    実世界座標(x, y) [cm] に変換します。
-    このツールは、画像上でユーザーがクリックした点などを、ロボットが目標とすべき物理座標に変換するために不可欠です。
-
-    【前提条件】
-    - この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。
-    - マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。
-
-    Args:
-        u (int): 変換したい画像の水平方向（横軸）のピクセル座標。
-        v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。
-    
-    Returns:
-        変換に成功した場合: `{"x": float, "y": float, "z": 0.0, "xw": float, "yw": float, "image_jpeg_base64": "..."}` という形式のJSON文字列。
-        - x, y: ビジョン座標系（マーカー原点）での座標 (cm)
-        - xw, yw: ロボットベース座標系での座標 (cm)。アーム操作(execute_sequence)にはこの値を使用してください。
-        - image_jpeg_base64: ターゲット位置を描画した画像のBase64エンコード文字列。
-        変換に失敗した場合: 失敗理由を示すエラーメッセージ文字列。
-    """
     vs = get_vision_system()
     if not vs:
         return "Error: Vision system is not available."
@@ -270,12 +415,11 @@ def convert_image_coords_to_world(u: int, v: int) -> str:
     # 座標変換のために最新のマーカー姿勢を取得・更新する
     vs.update_pose(visualize_axes=True)
 
-    coords, annotated_frame = vs.convert_2d_to_3d(u, v, draw_target=True)
+    coords, _ = vs.convert_2d_to_3d(u, v, draw_target=False)
     
     if coords:
         response_data = coords
-        # ロボットベース座標系(cm)への変換
-        # x, yはcm単位
+        # ロボットベース座標系(mm)への変換
         raw_x = response_data["x"]
         raw_y = response_data["y"]
         
@@ -284,76 +428,172 @@ def convert_image_coords_to_world(u: int, v: int) -> str:
         response_data["xw"] = round(raw_x + ROBOT_BASE_OFFSET_X, 1)
         response_data["yw"] = round(raw_y + ROBOT_BASE_OFFSET_Y, 1)
 
-        if annotated_frame is not None:
-            _, buffer = cv2.imencode('.jpg', annotated_frame)
-            base64_image = base64.b64encode(buffer).decode('utf-8')
-            response_data["image_jpeg_base64"] = base64_image
-
         return json.dumps(response_data)
     else:
         return "Error: Could not perform coordinate conversion. Ensure the ArUco marker is clearly visible to the camera."
 
 @mcp.tool()
-def get_pick_place_coordinates() -> str:
-    """
-    Vision GUIで設定されたPick位置とPlace位置の座標情報を取得します。
-    
-    戻り値 (JSON):
-    - status: "success" または "failure"
-    - pick: Pick位置の座標情報 {x, y, xw, yw, u, v} または null
-      - x, y: ビジョン座標系 (cm単位)
-      - xw, yw: ロボットベース座標系 (cm単位、オフセット考慮済み)。アーム操作にはこれを使用。
-    - place: Place位置の座標情報 {x, y, xw, yw, u, v} または null (同上)
-    - error: エラー時のメッセージ
-    """
-    try:
-        vs = get_vision_system()
-        if not vs:
-            return json.dumps({
-                "status": "failure",
-                "error": "Vision system could not be initialized."
-            })
-        
-        def process_point(pt):
-            if pt:
-                return {
-                    "u": pt["u"],
-                    "v": pt["v"],
-                    "x": round(pt["x"], 1),
-                    "y": round(pt["y"], 1),
-                    "xw": round(pt["x"] + ROBOT_BASE_OFFSET_X, 1),
-                    "yw": round(pt["y"] + ROBOT_BASE_OFFSET_Y, 1)
-                }
-            return None
-
-        return json.dumps({
-            "status": "success",
-            "pick": process_point(vs.pick_point),
-            "place": process_point(vs.place_point)
-        })
-    except Exception as e:
-        return json.dumps({
-            "status": "failure",
-            "error": str(e)
-        })
+@set_doc(DOCS['set_pick_place_points'])
+def set_pick_place_points(pick_x: float, pick_y: float, place_x: float, place_y: float, pick_z: float, place_z: float, safety_z: float) -> str:
+    vs = get_vision_system()
+    if vs:
+        vs.pick_point = {'x': pick_x, 'y': pick_y}
+        vs.place_point = {'x': place_x, 'y': place_y}
+        vs.pick_z = pick_z
+        vs.place_z = place_z
+        vs.safety_z = safety_z
+        return "Points and Z values set"
+    return "Error: Vision system not ready"
 
 @mcp.tool()
-def launch_vision_gui() -> str:
-    """
-    サーバー側でビジョンシステムのGUIウィンドウを起動します。
-    このウィンドウでは、マウスクリックによるPick & Place位置の指定と座標確認が可能です。
-    """
-    # メインスレッドでGUIを起動するためにキューにリクエストを入れる
-    gui_queue.put("launch")
-    return "Vision GUI launch requested. Please check the server window."
+@set_doc(DOCS['clear_pick_place_points'])
+def clear_pick_place_points() -> str:
+    vs = get_vision_system()
+    if vs:
+        vs.pick_point = None
+        vs.place_point = None
+        return "Points cleared"
+    return "Error: Vision system not ready"
+
+# --- ジョイパッド制御用 ---
+joypad_axis_values = {'X': 0, 'Y': 0, 'RX': 0, 'RY': 0}
+servo_pulse_widths = {'c0': 1500, 'c1': 1500, 'c2': 1500, 'c3': 1500}
+JOYPAD_GAINS = {
+    'c0': 0.05,
+    'c1': 0.05,
+    'c2': 0.05,
+    'c3': 0.2
+}
+
+SERVO_LIMITS = {
+    'c0': (500, 2500),
+    'c1': (500, 2500),
+    'c2': (1900, 2600),
+    'c3': (2250, 2700), # Gripper
+}
+
+def joypad_control_loop():
+    """ジョイパッド入力に基づくサーボ制御ループ"""
+    # 接続確立と初期値同期のために少し待機
+    time.sleep(3)
+    print("Syncing servo positions from robot...")
+    
+    # 現状のステータスを取得
+    status = send_command("dump")
+    print(f"Initial Robot Status: {status}")
+    
+    # ステータスから現在のパルス幅を読み取って同期
+    for cmd in servo_pulse_widths.keys():
+        match = re.search(rf"{cmd}[=:\s]+(\d+)", status)
+        if match:
+            try:
+                servo_pulse_widths[cmd] = float(match.group(1))
+                print(f"Synced {cmd} -> {servo_pulse_widths[cmd]}")
+            except ValueError:
+                pass
+
+    while True:
+        # 軸とコマンドのマッピング
+        # X -> c0, Y -> c2, RX -> c3, RY -> c1
+        mappings = [('X', 'c0'), ('Y', 'c2'), ('RX', 'c3'), ('RY', 'c1')]
+        
+        for axis, cmd in mappings:
+            val = joypad_axis_values.get(axis, 0)
+            if abs(val) > 5: # Deadzone
+                # パルス幅の更新 (入力値 -128~127 に応じて増減)
+                # ゲイン調整
+                delta = val * JOYPAD_GAINS.get(cmd, 0.05)
+                if cmd in ['c0', 'c1', 'c2']:
+                    servo_pulse_widths[cmd] -= delta
+                else:
+                    servo_pulse_widths[cmd] += delta
+                
+                # リミット適用
+                min_val, max_val = SERVO_LIMITS.get(cmd, (500, 2500))
+                servo_pulse_widths[cmd] = max(min_val, min(max_val, servo_pulse_widths[cmd]))
+                
+                # コマンド送信
+                send_command(f"{cmd}={int(servo_pulse_widths[cmd])}")
+        
+        time.sleep(0.02) # 50Hz
+
+# --- MJPEGストリーミングサーバー ---
+class StreamingHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/stream.mjpg':
+            self.send_response(200)
+            self.send_header('Age', '0')
+            self.send_header('Cache-Control', 'no-cache, private')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            try:
+                while True:
+                    vs = get_vision_system()
+                    if vs:
+                        frame_bytes = vs.get_jpeg_bytes()
+                        if frame_bytes:
+                            self.wfile.write(b'--frame\r\n')
+                            self.send_header('Content-Type', 'image/jpeg')
+                            self.send_header('Content-Length', len(frame_bytes))
+                            self.end_headers()
+                            self.wfile.write(frame_bytes)
+                            self.wfile.write(b'\r\n')
+                        else:
+                            time.sleep(0.05)
+                    else:
+                        time.sleep(0.1)
+                    time.sleep(0.04) # ~25 FPS
+            except Exception:
+                pass
+        else:
+            self.send_error(404)
 
 if __name__ == "__main__":
-    if "--gui" in sys.argv:
+    parser = argparse.ArgumentParser(description="MCP Server for Robot Arm Control")
+    parser.add_argument("--gui", action="store_true", help="Launch Vision GUI directly without starting the MCP server")
+    parser.add_argument("--calib-gui", action="store_true", help="Launch Calibration GUI directly without starting the MCP server")
+    parser.add_argument("--auto-gui", action="store_true", help="Automatically launch Vision GUI after starting the MCP server")
+    parser.add_argument("--lang", type=str, default="ja", choices=["ja", "en"], help="Language (ja/en)")
+    args = parser.parse_args()
+
+    # --- ジョイパッドサブシステムの起動 ---
+    if get_joypad_system:
+        try:
+            jp = get_joypad_system()
+            
+            # 制御ループスレッドの開始
+            ctrl_thread = threading.Thread(target=joypad_control_loop, daemon=True)
+            ctrl_thread.start()
+
+            def joypad_handler(cmd, value=None):
+                # ここでジョイパッドの入力をロボット操作にマッピングします
+                if cmd in joypad_axis_values and value is not None:
+                    joypad_axis_values[cmd] = value
+                elif cmd == "START":
+                    print("[Joypad] START pressed -> Checking Status")
+                    print(get_robot_status())
+                elif value is None:
+                    print(f"[Joypad] Button {cmd} pressed")
+            
+            jp.register_callback(joypad_handler)
+            jp.start()
+        except Exception as e:
+            print(f"Joypad initialization failed: {e}")
+
+    if args.gui:
         # GUIモードで起動
         vs = get_vision_system()
         if vs:
-            vs.run_interactive_mode()
+            vs.run_interactive_mode(command_callback=send_command)
             vs.release()
+    elif args.calib_gui:
+        if CalibrationGUI:
+            calib_gui = CalibrationGUI(send_command, ROBOT_BASE_OFFSET_X, ROBOT_BASE_OFFSET_Y)
+            calib_gui.run()
+        else:
+            print("CalibrationGUI is not available.")
     else:
         # MCPサーバーをバックグラウンドスレッドで起動し、メインスレッドはGUIイベントを待機する
         # (macOSなどではOpenCVのGUI操作はメインスレッドで行う必要があるため)
@@ -367,13 +607,37 @@ if __name__ == "__main__":
         server_thread.start()
         print("MCP Server running in background thread.")
 
+        # MJPEGストリーミングサーバーの起動
+        def run_mjpeg_server():
+            try:
+                socketserver.TCPServer.allow_reuse_address = True
+                server = socketserver.TCPServer(('0.0.0.0', 8000), StreamingHandler)
+                print("MJPEG Streaming Server running on port 8000")
+                server.serve_forever()
+            except Exception as e:
+                print(f"MJPEG Server error: {e}")
+        
+        mjpeg_thread = threading.Thread(target=run_mjpeg_server, daemon=True)
+        mjpeg_thread.start()
+
+        # 自動起動オプションがあればキューに入れる
+        if args.auto_gui:
+            gui_queue.put("launch")
+
         try:
             while True:
                 try:
-                    if gui_queue.get(timeout=1.0) == "launch":
+                    msg = gui_queue.get(timeout=1.0)
+                    if msg == "launch":
                         vs = get_vision_system()
                         if vs:
-                            vs.run_interactive_mode()
+                            vs.run_interactive_mode(command_callback=send_command)
+                    elif msg == "launch_calib":
+                        if CalibrationGUI:
+                            calib_gui = CalibrationGUI(send_command, ROBOT_BASE_OFFSET_X, ROBOT_BASE_OFFSET_Y)
+                            calib_gui.run()
+                        else:
+                            print("CalibrationGUI is not available.")
                 except queue.Empty:
                     pass
         finally:
