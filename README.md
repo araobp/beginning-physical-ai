@@ -16,6 +16,13 @@
 4. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その３：MCPサーバ編](https://qiita.com/araobp/items/d5ba84f84527ebcf72a1)
 5. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その４：ロボットの目編](https://qiita.com/araobp/items/510b497c3415f7f42f76)
 6. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その５：MCPクライアント編](https://qiita.com/araobp/items/f70e27586f46bbd7ba45)
+7. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その６：VLA検証準備編](https://qiita.com/araobp/items/f4a5af993a2fe730f373)
+
+## おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい ソースコード
+
+- [Robot Controller](https://github.com/araobp/beginning-physical-ai/tree/main/arduino/robot_controller)
+- [MCP Server](https://github.com/araobp/beginning-physical-ai/tree/main/python/mcp_server)
+- [MCP Client](https://github.com/araobp/beginning-physical-ai/tree/main/sveltekit/mcp_client)
 
 ## 部品・ツール
 
