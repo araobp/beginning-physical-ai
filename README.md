@@ -1,5 +1,7 @@
 # Beginning Physical AI
 
+
+最安価4-DoFロボットアーム（アクリル製）
 <img src="docs/4DoF_Robot_Kit.jpg" width="500px">
 
 ## Qiita記事投稿
