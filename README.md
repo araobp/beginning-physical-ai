@@ -22,7 +22,7 @@
 - [カメラ歪み補正、ArUcoマーカー](https://github.com/araobp/beginning-physical-ai/tree/main/python/vision)
 - [転移学習(YOLO11 Nano向け、開発中)]()
 
-### ロボットシステム
+### フィジカルAIシステム（開発中）
 
 - [Robot Controller](https://github.com/araobp/beginning-physical-ai/tree/main/arduino/robot_controller)
 - [MCP Server](https://github.com/araobp/beginning-physical-ai/tree/main/python/mcp_server)
