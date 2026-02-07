@@ -20,7 +20,7 @@
 ### 準備ツール
 
 - [カメラ歪み補正、ArUcoマーカー](https://github.com/araobp/beginning-physical-ai/tree/main/python/vision)
-- [転移学習(YOLO11 Nano向け、開発中)]()
+- [転移学習(YOLO11 Nano向け、開発中)](https://github.com/araobp/beginning-physical-ai/tree/main/annotations)
 
 ### フィジカルAIシステム（開発中）
 
