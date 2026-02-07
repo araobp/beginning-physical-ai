@@ -66,6 +66,8 @@ ArduinoのI2C通信では、Wire.begin();を実行すると、デジタルピン
 
 ## 関連する私のGitHubプロジェクト
 
+現在、ICT企業へ所属している私から見て、ICT企業の役目は、他の企業とコラボしながら、〇〇OSとしてフィジカルAIをまとめ上げ、それを海外へも展開していくことと思える。
+
 - Gemini Robotics-ERでUnity上の多軸ロボットを制御(Unity)　=> https://github.com/araobp/unity-robotics
 - Gemini Liveで博物館内展示の自動音声応対(SvelteKit, Godot) => https://github.com/araobp/godot-museum
 - Arduinoで赤外線アレイセンサー(異常検知に使える？) => https://github.com/araobp/arduino-infrared-array-sensor
