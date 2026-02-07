@@ -68,7 +68,7 @@ ArduinoのI2C通信では、Wire.begin();を実行すると、デジタルピン
 
 現在、ICT企業へ所属している私から見て、ICT企業の役目は、他の企業とコラボしながら、〇〇OSとしてフィジカルAIをまとめ上げ、それを海外へも展開していくことと思える。
 
-B2B2Cの観点でフィジカルAIを捉えられるか？短期利益の確保、目先の技術開発やB2Bで思考が止まっていないか？このビジネスは、そこで勝敗が別れそう。そういう意味で、B2B2C観点で色々と実験してみた結果が以下。
+B2B2Cの観点でフィジカルAIを捉えられるか？短期利益の確保、目先の自社技術開発やB2Bで思考が止まっていないか？このビジネスは、そこで勝敗が別れそう。そういう意味で、B2B2C観点で色々と実験してみた結果が以下。
 
 - Gemini Robotics-ERでUnity上の多軸ロボットを制御(Unity)　=> https://github.com/araobp/unity-robotics
 - Gemini Liveで博物館内展示の自動音声応対(SvelteKit, Godot) => https://github.com/araobp/godot-museum
