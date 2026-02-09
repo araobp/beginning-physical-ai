@@ -18,7 +18,7 @@
   let executionResult = $state<{ text?: string; image?: string } | null>(null);
   let isExecuting = $state(false);
   let tfReady = $state(false);
-  let detectionModel = $state("gemini-2.5-flash");
+  let detectionModel = $state("yolo11n");
   let detecting = $state(false);
   let targetMarker = $state<{ x: number, y: number } | null>(null);
   let targetImageCoords = $state<{ u: number, v: number } | null>(null);
@@ -37,6 +37,10 @@
   let ppSafetyZ = $state(70);
   let ppLive = $state(false);
   let liveInterval: any = null;
+  let ppShowDetections = $state(false);
+  let ppDetectionInterval = $state(500); // ms
+  let ppDetections = $state<any[]>([]);
+  let ppDetectionPolling = $state(false);
   let joypadLeft = $state({ x: 0, y: 0 });
   let joypadRight = $state({ x: 0, y: 0 });
   let currentRobotPos = $state({ x: 0, y: 0, z: 0 });
@@ -46,6 +50,20 @@
     if (ppPickPoint && ppPlacePoint) {
       updateServerPoints();
     }
+  });
+
+  let ppDetectionTimeout: any = null;
+  $effect(() => {
+    if (ppShowDetections && ppLive) {
+      // Start polling
+      clearTimeout(ppDetectionTimeout); // Clear any existing timer
+      pollDetections();
+    } else {
+      // Stop polling
+      clearTimeout(ppDetectionTimeout);
+      ppDetections = [];
+    }
+    return () => clearTimeout(ppDetectionTimeout);
   });
 
   // Language Settings
@@ -80,7 +98,9 @@
       settings_lang: "言語設定",
       joypad_left: "左",
       joypad_right: "右",
-      gemini_placeholder: "Gemini Robotics-ER や Gemini Live によるVLA評価画面追加予定"
+      gemini_placeholder: "Gemini Robotics-ER や Gemini Live によるVLA評価画面追加予定",
+      show_detections: "物体検出",
+      interval_ms: "更新間隔(ms)",
     },
     en: {
       title: "The Cheapest 4-DoF Robot Arm",
@@ -109,7 +129,9 @@
       settings_lang: "Language",
       joypad_left: "Left",
       joypad_right: "Right",
-      gemini_placeholder: "Gemini Robotics-ER or Gemini Live VLA evaluation screen coming soon"
+      gemini_placeholder: "Gemini Robotics-ER or Gemini Live VLA evaluation screen coming soon",
+      show_detections: "Object Detection",
+      interval_ms: "Interval (ms)",
     }
   };
 
@@ -125,8 +147,12 @@
     '#FF6D00', // Orange
   ];
 
-  function getColorForIndex(index: number) {
-    return boxColors[index % boxColors.length];
+  function getColorForLabel(label: string) {
+    let hash = 0;
+    for (let i = 0; i < label.length; i++) {
+      hash = label.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return boxColors[Math.abs(hash) % boxColors.length];
   }
 
   function getTextColor(hexcolor: string) {
@@ -268,12 +294,14 @@
   async function detectObjects() {
     if (detectionModel === 'tensorflow.js') {
       await detectObjectsTF();
+    } else if (detectionModel === 'yolo11n') {
+      await detectObjectsYolo();
     } else {
       await detectObjectsGemini();
     }
   }
 
-  async function detectObjectsGemini() {
+  async function detectObjectsYolo() {
     detecting = true;
     targetMarker = null;
     targetImageCoords = null;
@@ -285,20 +313,128 @@
         method: 'POST',
         body: JSON.stringify({
           type: 'call_tool',
-          name: 'detect_objects',
-          arguments: { model_name: detectionModel }
+          name: 'get_live_image',
+          arguments: { 
+            visualize_axes: visualizeAxes,
+            detect_objects: true,
+            confidence: 0.5
+          }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
       const result = await res.json();
-      if (result.error) {
-        alert(result.error);
-        return;
+      
+      if (result.content && Array.isArray(result.content)) {
+        for (const content of result.content) {
+          if (content.type === 'text') {
+            try {
+              const parsed = JSON.parse(content.text);
+              if (parsed.image_jpeg_base64) {
+                cameraImage = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
+                if (parsed.detections && Array.isArray(parsed.detections)) {
+                  console.log("Detections received:", parsed.detections);
+                  detectedObjects = parsed.detections.map((o: any) => ({
+                    label: o.label,
+                    confidence: o.confidence,
+                    box_2d: o.box_2d,
+                    imageCoords: null,
+                    worldCoords: null,
+                    isTransforming: false
+                  }));
+                }
+                return;
+              }
+            } catch (e) {}
+            if (content.text.startsWith("Error")) {
+               alert(content.text);
+               return;
+            }
+          }
+        }
       }
-      cameraImage = result.image;
-      detectedObjects = result.objects.map((o: any) => ({ ...o, imageCoords: null, worldCoords: null, isTransforming: false }));
     } catch (e: any) {
       console.error('Detection failed:', e);
+      alert(`Error: ${e.message}`);
+    } finally {
+      detecting = false;
+    }
+  }
+
+  async function detectObjectsGemini() {
+    detecting = true;
+    targetMarker = null;
+    targetImageCoords = null;
+    targetWorldCoords = null;
+    detectedObjects = [];
+
+    try {
+      // 1. MCPサーバーから最新画像を取得 (get_live_imageツールを使用)
+      const resImg = await fetch('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'call_tool',
+          name: 'get_live_image',
+          arguments: { visualize_axes: visualizeAxes }
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const resultImg = await resImg.json();
+      
+      let currentImgBase64 = null;
+      // MCPのレスポンスから画像を抽出
+      if (resultImg.content && Array.isArray(resultImg.content)) {
+        for (const content of resultImg.content) {
+          if (content.type === 'text') {
+            try {
+              const parsed = JSON.parse(content.text);
+              if (parsed.image_jpeg_base64) {
+                currentImgBase64 = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
+                cameraImage = currentImgBase64; // UI更新
+              }
+            } catch (e) {}
+          }
+        }
+      }
+
+      if (!currentImgBase64) {
+        throw new Error("Failed to capture image from robot camera.");
+      }
+
+      // 2. Node.jsサーバー経由でGemini APIを呼び出し
+      const resGemini = await fetch('/api/gemini', {
+        method: 'POST',
+        body: JSON.stringify({
+          image: currentImgBase64,
+          model: detectionModel
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (!resGemini.ok) {
+        const errText = await resGemini.text();
+        throw new Error(`Server Error (${resGemini.status}): ${errText.slice(0, 100)}...`);
+      }
+
+      const resultGemini = await resGemini.json();
+      
+      if (resultGemini.error) {
+        throw new Error(resultGemini.error);
+      }
+
+      if (resultGemini.detections && Array.isArray(resultGemini.detections)) {
+        console.log("Gemini Detections:", resultGemini.detections);
+        detectedObjects = resultGemini.detections.map((o: any) => ({
+          label: o.label,
+          confidence: o.confidence,
+          box_2d: o.box_2d,
+          imageCoords: null,
+          worldCoords: null,
+          isTransforming: false
+        }));
+      }
+
+    } catch (e: any) {
+      console.error('Gemini Detection failed:', e);
       alert(`Error: ${e.message}`);
     } finally {
       detecting = false;
@@ -607,6 +743,51 @@
     }
   }
 
+  async function pollDetections() {
+    if (!ppLive || !ppShowDetections || ppDetectionPolling) {
+        return;
+    }
+    ppDetectionPolling = true;
+    try {
+        const res = await fetch('/mcp', {
+            method: 'POST',
+            body: JSON.stringify({
+                type: 'call_tool',
+                name: 'get_live_image',
+                arguments: { 
+                    detect_objects: true,
+                    return_image: false, // Only get detections
+                    confidence: 0.5 
+                }
+            }),
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await res.json();
+        if (result.content && Array.isArray(result.content)) {
+            for (const content of result.content) {
+                if (content.type === 'text') {
+                    try {
+                        const parsed = JSON.parse(content.text);
+                        if (parsed.detections && Array.isArray(parsed.detections)) {
+                            ppDetections = parsed.detections;
+                        }
+                    } catch (e) {
+                        console.error("Error parsing detection poll response:", e);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Detection polling failed:", e);
+    } finally {
+        ppDetectionPolling = false;
+        // Schedule next poll
+        if (ppLive && ppShowDetections) {
+            ppDetectionTimeout = setTimeout(pollDetections, ppDetectionInterval);
+        }
+    }
+  }
+
   function clearPPPoints() {
     ppPickPoint = null;
     ppPlacePoint = null;
@@ -617,13 +798,18 @@
     ppLive = !ppLive;
     if (ppLive) {
         // ストリーミングURLを設定 (ポート8000)
-        ppImage = `http://${window.location.hostname}:8000/stream.mjpg`;
+        ppImage = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
+        if (ppShowDetections) {
+            pollDetections();
+        }
     } else {
         ppImage = null;
         if (liveInterval) {
             clearInterval(liveInterval);
             liveInterval = null;
         }
+        clearTimeout(ppDetectionTimeout);
+        ppDetections = [];
     }
   }
 
@@ -829,9 +1015,10 @@
         <div class="d-flex flex-column align-items-center mt-3">
           <div class="mb-3 d-flex gap-2 align-items-center">
             <select class="form-select w-auto" bind:value={detectionModel}>
+              <option value="yolo11n">yolo11n</option>
+              <option value="tensorflow.js">tensorflow.js</option>
               <option value="gemini-2.5-flash">gemini-2.5-flash</option>
               <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
-              <option value="tensorflow.js">tensorflow.js</option>
             </select>
             <div class="form-check">
               <input class="form-check-input" type="checkbox" id="visualizeAxesCheck" bind:checked={visualizeAxes}>
@@ -859,8 +1046,8 @@
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
               <img src={cameraImage} alt="Robot Camera View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handleImageClick} />
               {#each detectedObjects as obj, i}
-                {@const color = getColorForIndex(i)}
-                <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none;">
+                {@const color = getColorForLabel(obj.label)}
+                <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
                   <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
                 </div>
                 {@const groundContactX = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[1] / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
@@ -905,6 +1092,14 @@
             <button class="btn {ppLive ? 'btn-danger' : 'btn-outline-danger'}" onclick={toggleLive}>
               {ppLive ? t.stop_live : t.live}
             </button>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={ppShowDetections}>
+              <label class="form-check-label" for="ppShowDetectionsSwitch">{t.show_detections}</label>
+            </div>
+            <div class="input-group input-group-sm" style="width: auto;">
+                <span class="input-group-text">{t.interval_ms}</span>
+                <input type="number" class="form-control" style="width: 80px;" bind:value={ppDetectionInterval} disabled={!ppShowDetections}>
+            </div>
             <button class="btn btn-secondary" onclick={clearPPPoints} disabled={ppExecuting}>
               {t.clear}
             </button>
@@ -932,6 +1127,15 @@
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
               <img src={ppImage} alt="Pick & Place View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handlePPImageClick} />
               
+              {#if ppShowDetections}
+                {#each ppDetections as obj}
+                  {@const color = getColorForLabel(obj.label)}
+                  <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
+                    <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
+                  </div>
+                {/each}
+              {/if}
+
               {#if ppPickPoint}
                 {@const pt = ppPickPoint}
                 <div style="position: absolute; left: {pt.u_norm * 100}%; top: {pt.v_norm * 100}%; transform: translate(-50%, -50%); pointer-events: none;">

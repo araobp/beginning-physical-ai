@@ -22,6 +22,11 @@ import http.server
 import socketserver
 from vision_system import VisionSystem
 try:
+    from ultralytics import YOLO
+except ImportError:
+    print("Warning: 'ultralytics' module not found. Object detection disabled.")
+    YOLO = None
+try:
     from joypad import get_joypad_system
 except ImportError:
     print("Warning: 'joypad' module not found or 'hid' library missing. Joypad support disabled.")
@@ -90,6 +95,7 @@ CAMERA_ID = 0
 # マーカー座標系の原点(x=0, y=0)は、世界座標系では X=196mm, Y=100mm となるため、オフセットは正の値(mm)となります。
 ROBOT_BASE_OFFSET_X = 140.0 + 56.0
 ROBOT_BASE_OFFSET_Y = 100.0
+YOLO_MODEL_PATH = "best.pt"
 
 mcp = FastMCP(
     "RobotArmController"
@@ -99,6 +105,7 @@ mcp = FastMCP(
 # VisionSystemとシリアル接続は、必要になるまで初期化しない（遅延初期化）
 _vision_system = None
 _serial_conn = None
+_yolo_model = None
 _serial_lock = threading.Lock() # シリアル通信の排他制御用ロック
 
 # GUI起動リクエスト用のキュー (macOSでのOpenCVスレッド制約対策)
@@ -160,6 +167,19 @@ def get_vision_system():
             print(f"Failed to initialize VisionSystem: {e}")
             return None
     return _vision_system
+
+def get_yolo_model():
+    """YOLOモデルのシングルトンインスタンスを取得します（遅延初期化）。"""
+    global _yolo_model
+    if _yolo_model is None and YOLO is not None:
+        try:
+            print(f"Loading YOLO model from {YOLO_MODEL_PATH}...")
+            _yolo_model = YOLO(YOLO_MODEL_PATH)
+            print("YOLO model loaded successfully.")
+        except Exception as e:
+            print(f"Failed to load YOLO model: {e}")
+            return None
+    return _yolo_model
 
 def get_serial():
     """
@@ -269,7 +289,7 @@ TOOL_DOCS = {
     """,
         'get_robot_status': "Retrieves the current status of the robot arm (TCP coordinates, joint angles, etc.). Use this to understand the arm's current position before planning movements.",
         'get_joypad_state': "Retrieves the current input state (axis values) of the joypad. Returns JSON: {'X': float, 'Y': float, 'RX': float, 'RY': float}",
-        'get_live_image': "Captures a single undistorted live frame from the camera and returns it as a Base64 encoded JPEG. Used to visually confirm the current status of the robot's workspace. If a reference marker is detected, 3D axes are overlaid. Returns JSON `{'image_jpeg_base64': '...'}`. Args: visualize_axes (bool): If True, draws coordinate axes.",
+        'get_live_image': "Captures a live frame and/or detects objects. Returns JSON `{'image_jpeg_base64': '...', 'detections': [...]}`. Args: visualize_axes (bool): If True, draws coordinate axes on the image. detect_objects (bool): If True, runs object detection. confidence (float): Confidence threshold for detection (default 0.5). return_image (bool): If True, returns the Base64 encoded image. If False, returns only detection results.",
         'convert_image_coords_to_world': "Converts pixel coordinates (u, v) from the undistorted image to real-world coordinates (x, y) [mm] on the robot's working plane (Z=0). Essential for converting user clicks on the image to physical coordinates for the robot. Prerequisites: ArUco marker must be visible. Args: u (int), v (int). Returns JSON with x, y (marker coords), xw, yw (robot coords).",
         'set_pick_place_points': "Sets Pick/Place positions and Z heights (pick, place, safety) in the VisionSystem to enable trajectory drawing. Coordinates are in Marker Coordinate System (mm).",
         'clear_pick_place_points': "Clears Pick/Place positions set in the VisionSystem and disables trajectory drawing."
@@ -323,7 +343,7 @@ TOOL_DOCS = {
     """,
         'get_robot_status': "ロボットアームの現在の状態（TCP座標、各関節の角度など）を取得します。\n動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。",
         'get_joypad_state': "現在のジョイパッドの入力状態（各軸の値）を取得します。\n戻り値 (JSON): {\"X\": float, \"Y\": float, \"RX\": float, \"RY\": float}",
-        'get_live_image': "カメラから歪み補正済みのライブ映像を1フレームキャプチャし、Base64エンコードされたJPEG形式で返します。\nこの画像は、ロボットの作業領域の現在の状況を視覚的に確認するために使用します。\n基準マーカーが検出されている場合は、画像の座標系を示す3D軸が重畳描画されます。\n返り値は `{\"image_jpeg_base64\": \"...\"}` という形式のJSON文字列です。\n\nArgs:\n    visualize_axes (bool): Trueの場合、画像に座標軸を描画します。",
+        'get_live_image': "カメラから歪み補正済みのライブ映像や物体検出結果を取得します。\n返り値は `{\"image_jpeg_base64\": \"...\", \"detections\": [...]}` という形式のJSON文字列です。\n\nArgs:\n    visualize_axes (bool): Trueの場合、画像に座標軸を描画します。\n    detect_objects (bool): Trueの場合、物体検出を行います。\n    confidence (float): 検出の信頼度しきい値 (デフォルト0.5)。\n    return_image (bool): Trueの場合、Base64エンコードされた画像を返します。Falseの場合、検出結果のみを返します。",
         'convert_image_coords_to_world': "歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の\n実世界座標(x, y) [mm] に変換します。\nこのツールは、画像上でユーザーがクリックした点などを、ロボットが目標とすべき物理座標に変換するために不可欠です。\n\n【前提条件】\n- この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。\n- マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。\n\nArgs:\n    u (int): 変換したい画像の水平方向（横軸）のピクセル座標。\n    v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。\n\nReturns:\n    変換に成功した場合: `{\"x\": float, \"y\": float, \"z\": 0.0, \"xw\": float, \"yw\": float}` という形式のJSON文字列。\n    - x, y: マーカー座標系（マーカー原点）での座標 (mm)\n    - xw, yw: ロボットベース座標系での座標 (mm)。アーム操作(execute_sequence)にはこの値を使用してください。\n    変換に失敗した場合: 失敗理由を示すエラーメッセージ文字列。",
         'set_pick_place_points': "VisionSystemにPick位置とPlace位置を設定し、ストリーミング映像への軌道描画を有効にします。\n座標はマーカー座標系(mm)です。",
         'clear_pick_place_points': "VisionSystemに設定されたPick/Place位置をクリアし、軌道描画を無効にします。"
@@ -391,19 +411,35 @@ def get_joypad_state() -> str:
 
 @mcp.tool()
 @set_doc(DOCS['get_live_image'])
-def get_live_image(visualize_axes: bool = True) -> str:
+def get_live_image(visualize_axes: bool = True, detect_objects: bool = False, confidence: float = 0.5, return_image: bool = True) -> str:
     vs = get_vision_system()
     if not vs:
         return "Error: Vision system is not available."
     
-    # 姿勢を更新し、マーカーが見える場合に軸が描画されるようにする
+    # 姿勢を更新。画像が不要でも検出には最新フレームが必要
     vs.update_pose(visualize_axes=visualize_axes)
     
-    base64_image = vs.get_undistorted_image_base64()
-    if base64_image:
-        return json.dumps({"image_jpeg_base64": base64_image})
-    else:
-        return "Error: Failed to capture image from camera."
+    detections = None
+    if detect_objects:
+        model = get_yolo_model()
+        if model:
+            detections = vs.detect_objects(model, confidence)
+        else:
+            # 検出が要求されたがモデルがない場合はエラー
+            return "Error: YOLO model not loaded."
+
+    resp = {}
+    if detections is not None:
+        resp["detections"] = detections
+    
+    if return_image:
+        base64_image = vs.get_undistorted_image_base64()
+        if base64_image:
+            resp["image_jpeg_base64"] = base64_image
+        elif not resp: # 画像も検出結果もない場合
+            return "Error: Failed to capture image from camera."
+    
+    return json.dumps(resp, ensure_ascii=False)
 
 @mcp.tool()
 @set_doc(DOCS['convert_image_coords_to_world'])
@@ -520,7 +556,7 @@ def joypad_control_loop():
 # --- MJPEGストリーミングサーバー ---
 class StreamingHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/stream.mjpg':
+        if self.path.startswith('/stream.mjpg'):
             self.send_response(200)
             self.send_header('Age', '0')
             self.send_header('Cache-Control', 'no-cache, private')
@@ -556,7 +592,11 @@ if __name__ == "__main__":
     parser.add_argument("--calib-gui", action="store_true", help="Launch Calibration GUI directly without starting the MCP server")
     parser.add_argument("--auto-gui", action="store_true", help="Automatically launch Vision GUI after starting the MCP server")
     parser.add_argument("--lang", type=str, default="ja", choices=["ja", "en"], help="Language (ja/en)")
+    parser.add_argument("--model", type=str, default="best.pt", help="Path to YOLO model file (default: best.pt)")
     args = parser.parse_args()
+
+    # グローバル設定の更新
+    YOLO_MODEL_PATH = args.model
 
     # --- ジョイパッドサブシステムの起動 ---
     if get_joypad_system:
@@ -611,7 +651,8 @@ if __name__ == "__main__":
         def run_mjpeg_server():
             try:
                 socketserver.TCPServer.allow_reuse_address = True
-                server = socketserver.TCPServer(('0.0.0.0', 8000), StreamingHandler)
+                server = socketserver.ThreadingTCPServer(('0.0.0.0', 8000), StreamingHandler)
+                server.daemon_threads = True
                 print("MJPEG Streaming Server running on port 8000")
                 server.serve_forever()
             except Exception as e:

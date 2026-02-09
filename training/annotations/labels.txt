@@ -1,0 +1,13 @@
+earplug_case_ok
+earplug_case_ng
+eraser_ok
+eraser_ng
+melamine_sponge_ok
+melamine_sponge_ng
+battery_ok
+battery_ng
+pencil_cap_ok
+pencil_cap_ng
+beer_crate
+basket
+gripper

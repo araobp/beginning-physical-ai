@@ -56,6 +56,7 @@ class VisionSystem:
             raise IOError(f"カメラ {cam_id} を開けません。")
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap_lock = threading.Lock()
 
         # 姿勢データ (update_pose()で更新)
         self.rvec = None
@@ -102,7 +103,8 @@ class VisionSystem:
         if not force_update and time.time() - self.last_pose_update_time < self.pose_cache_duration:
             return self.rvec is not None
 
-        ret, frame = self.cap.read()
+        with self.cap_lock:
+            ret, frame = self.cap.read()
         if not ret:
             self.rvec, self.tvec, self.R, self.camera_pos = None, None, None, None
             return False
@@ -165,7 +167,8 @@ class VisionSystem:
         if self.last_processed_frame is not None and (time.time() - self.last_frame_capture_time < 0.5):
             undistorted_frame = self.last_processed_frame.copy()
         else:
-            ret, frame = self.cap.read()
+            with self.cap_lock:
+                ret, frame = self.cap.read()
             if not ret: return None
             undistorted_frame = cv2.undistort(frame, self.mtx, self.dist, None, self.mtx)
         
@@ -232,23 +235,52 @@ class VisionSystem:
         _, buffer = cv2.imencode('.jpg', frame)
         return buffer.tobytes()
 
-    def draw_detections(self, detections):
+    def detect_objects(self, model, confidence=0.5):
         """
-        キャッシュされた最新フレームに検出結果（バウンディングボックス、ラベル、把持点）を描画してBase64画像を返す。
+        YOLOモデルを使用して、現在のフレームから物体検出を行います。
         
         Args:
-            detections (list): 検出オブジェクトのリスト。
-                各要素は {"label": str, "box_2d": [ymin, xmin, ymax, xmax], "ground_contact_point_2d": [y, x]} などを想定。
-                座標は 0-1000 の正規化座標。
+            model: YOLOモデルインスタンス (ultralytics.YOLO)
+            confidence (float): 信頼度しきい値
+            
+        Returns:
+            list: 検出結果のリスト [{"label": str, "confidence": float, "box_2d": [...]}, ...]
         """
         if self.last_processed_frame is None:
-            return None
+            return []
 
-        frame = self.last_processed_frame.copy()
+        frame = self.last_processed_frame
         h, w = frame.shape[:2]
 
+        # 推論実行
+        results = model.predict(frame, conf=confidence, verbose=False)
+        result = results[0]
+        
+        detections = []
+        for box in result.boxes:
+            # box.xyxy is [x1, y1, x2, y2] in pixels
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            cls_id = int(box.cls[0])
+            label = result.names[cls_id]
+            conf = float(box.conf[0])
+            
+            # VisionSystem.draw_detections 用に 0-1000 スケールに正規化
+            norm_box = [
+                (y1 / h) * 1000,
+                (x1 / w) * 1000,
+                (y2 / h) * 1000,
+                (x2 / w) * 1000
+            ]
+            detections.append({"label": label, "confidence": conf, "box_2d": norm_box})
+            
+        return detections
+
+    def _draw_detections_overlay(self, frame, detections):
+        """フレームに検出結果を描画する（内部ヘルパー）"""
+        h, w = frame.shape[:2]
         for det in detections:
             label = str(det.get("label", "Object"))
+            conf = det.get("confidence", None)
             box = det.get("box_2d")
             
             # バウンディングボックスの描画
@@ -262,7 +294,11 @@ class VisionSystem:
                 
                 color = (0, 255, 0) # Green
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                text = label
+                if conf is not None:
+                    text += f" {conf:.2f}"
+                cv2.putText(frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             # 把持ポイント/接地点の描画
             point = det.get("ground_contact_point_2d")
@@ -272,6 +308,20 @@ class VisionSystem:
                 cy = int(py * h / 1000)
                 cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1) # Red dot
 
+    def draw_detections(self, detections):
+        """
+        キャッシュされた最新フレームに検出結果（バウンディングボックス、ラベル、把持点）を描画してBase64画像を返す。
+        
+        Args:
+            detections (list): 検出オブジェクトのリスト。
+                各要素は {"label": str, "box_2d": [ymin, xmin, ymax, xmax], "ground_contact_point_2d": [y, x]} などを想定。
+                座標は 0-1000 の正規化座標。
+        """
+        if self.last_processed_frame is None:
+            return None
+
+        frame = self.last_processed_frame.copy()
+        self._draw_detections_overlay(frame, detections)
         _, buffer = cv2.imencode('.jpg', frame)
         return base64.b64encode(buffer).decode('utf-8')
 
