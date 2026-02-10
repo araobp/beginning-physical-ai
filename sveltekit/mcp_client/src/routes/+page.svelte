@@ -341,6 +341,7 @@
                     label: o.label,
                     confidence: o.confidence,
                     box_2d: o.box_2d,
+                    ground_center: o.ground_center,
                     imageCoords: null,
                     worldCoords: null,
                     isTransforming: false
@@ -431,6 +432,7 @@
           label: o.label,
           confidence: o.confidence,
           box_2d: o.box_2d,
+          ground_center: o.ground_center,
           imageCoords: null,
           worldCoords: null,
           isTransforming: false
@@ -493,8 +495,8 @@
         await new Promise(resolve => img.onload = resolve);
         const { naturalWidth: width, naturalHeight: height } = img;
 
-        const groundContactY = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[0] : obj.box_2d[2];
-        const groundContactX = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[1] : (obj.box_2d[1] + obj.box_2d[3]) / 2;
+        const groundContactY = obj.ground_center ? obj.ground_center.v_norm : obj.box_2d[2];
+        const groundContactX = obj.ground_center ? obj.ground_center.u_norm : (obj.box_2d[1] + obj.box_2d[3]) / 2;
 
         const u = Math.floor(groundContactX * width / 1000);
         const v = Math.floor(groundContactY * height / 1000);
@@ -1058,8 +1060,11 @@
                 <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
                   <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
                 </div>
-                {@const groundContactX = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[1] / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
-                {@const groundContactY = obj.ground_contact_point_2d ? obj.ground_contact_point_2d[0] / 10 : obj.box_2d[2] / 10}
+                {@const groundContactX = obj.ground_center ? obj.ground_center.u_norm / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
+                {@const groundContactY = obj.ground_center ? obj.ground_center.v_norm / 10 : obj.box_2d[2] / 10}
+                {#if obj.ground_center && obj.ground_center.radius_u_norm}
+                    <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0.7;"></div>
+                {/if}
                 <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;"></div>
                 <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 10;">
                     {#if obj.imageCoords}
@@ -1141,6 +1146,12 @@
                   <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
                     <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
                   </div>
+                  {@const groundContactX = obj.ground_center ? obj.ground_center.u_norm / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
+                  {@const groundContactY = obj.ground_center ? obj.ground_center.v_norm / 10 : obj.box_2d[2] / 10}
+                  {#if obj.ground_center && obj.ground_center.radius_u_norm}
+                      <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; opacity: 0.7;"></div>
+                  {/if}
+                  <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 6;"></div>
                 {/each}
               {/if}
 

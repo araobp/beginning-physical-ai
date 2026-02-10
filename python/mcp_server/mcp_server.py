@@ -263,7 +263,7 @@ TOOL_DOCS = {
 
     [Command Syntax]
     1. move x=<val> y=<val> z=<val> s=<speed>:
-       Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm).
+       Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm) in the **Robot Base Coordinate System**.
        s is the speed, range 0-100.
     2. grip <open|close>:
        Opens or closes the gripper.
@@ -276,7 +276,8 @@ TOOL_DOCS = {
     - **Collision Avoidance**: Always raise to safety height before moving horizontally after gripping.
     """,
         'execute_sequence_marker_coords': """
-    Executes a command sequence described in the Marker Coordinate System (ArUco marker origin).
+    Executes a command sequence described in the **ArUco Marker Coordinate System** (origin at marker).
+    The `x`, `y`, `z` in the commands are interpreted as marker coordinates.
     Automatically adds offsets to convert to Robot Base Coordinates.
 
     [Coordinate Transformation]
@@ -289,8 +290,35 @@ TOOL_DOCS = {
     """,
         'get_robot_status': "Retrieves the current status of the robot arm (TCP coordinates, joint angles, etc.). Use this to understand the arm's current position before planning movements.",
         'get_joypad_state': "Retrieves the current input state (axis values) of the joypad. Returns JSON: {'X': float, 'Y': float, 'RX': float, 'RY': float}",
-        'get_live_image': "Captures a live frame and/or detects objects. Returns JSON `{'image_jpeg_base64': '...', 'detections': [...]}`. Args: visualize_axes (bool): If True, draws coordinate axes on the image. detect_objects (bool): If True, runs object detection and returns bounding box data (does not draw on image). confidence (float): Confidence threshold for detection (default 0.7). return_image (bool): If True, returns the Base64 encoded image. If False, returns only detection results.",
-        'convert_image_coords_to_world': "Converts pixel coordinates (u, v) from the undistorted image to real-world coordinates (x, y) [mm] on the robot's working plane (Z=0). Essential for converting user clicks on the image to physical coordinates for the robot. Prerequisites: ArUco marker must be visible. Args: u (int), v (int). Returns JSON with x, y (marker coords), xw, yw (robot coords).",
+        'get_live_image': """
+    Captures a live frame and/or detects objects. Returns JSON `{'image_jpeg_base64': '...', 'detections': [...]}`.
+
+    [Coordinate Systems & Parameters]
+    - **x, y, z**: Coordinates in ArUco Marker Coordinate System (origin at marker, mm).
+    - **xw, yw, zw**: Coordinates in Robot Base Coordinate System (origin at robot base, mm). Use these for `execute_sequence`.
+    - **r**: Estimated radius of the object (mm).
+    - **u, v**: Pixel coordinates on the image (px).
+    - **u_norm, v_norm**: Normalized image coordinates (0-1000).
+    - **radius_u_norm, radius_v_norm**: Normalized radius on the image.
+
+    If `detect_objects` is true, `detections` includes `ground_center` containing these values for the object's base center.
+
+    Args:
+        visualize_axes (bool): If True, draws coordinate axes on the image.
+        detect_objects (bool): If True, runs object detection.
+        confidence (float): Confidence threshold for detection (default 0.7).
+        return_image (bool): If True, returns the Base64 encoded image. If False, returns only detection results.
+    """,
+        'convert_image_coords_to_world': """
+    Converts pixel coordinates (u, v) from the undistorted image to real-world coordinates (x, y) [mm] on the robot's working plane (Z=0).
+
+    [Returns JSON]
+    - **x, y**: Coordinates in ArUco Marker Coordinate System (mm).
+    - **xw, yw**: Coordinates in Robot Base Coordinate System (mm). Use these for robot commands.
+
+    Prerequisites: ArUco marker must be visible.
+    Args: u (int), v (int).
+    """,
         'set_pick_place_points': "Sets Pick/Place positions and Z heights (pick, place, safety) in the VisionSystem to enable trajectory drawing. Coordinates are in Marker Coordinate System (mm).",
         'clear_pick_place_points': "Clears Pick/Place positions set in the VisionSystem and disables trajectory drawing."
     },
@@ -320,6 +348,7 @@ TOOL_DOCS = {
     【コマンド文法】
     1. move x=<値> y=<値> z=<値> s=<速度>:
        アームの先端 (TCP: Tool Center Point) を指定の3次元座標 (mm) へ移動させます。
+       **座標系は「ロボットベース座標系（世界座標系）」です。**
        sは移動速度で、0から100の範囲で指定します。
     2. grip <open|close>:
        グリッパーを開きます ('open') または閉じます ('close')。
@@ -332,7 +361,8 @@ TOOL_DOCS = {
     - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。低い高度のまま直線的に移動すると、他の物体と衝突する危険があります。
     """,
         'execute_sequence_marker_coords': """
-    ArUcoマーカーを原点とするマーカー座標系で記述されたコマンドシーケンスを実行します。
+    **ArUcoマーカー座標系**（マーカー原点）で記述されたコマンドシーケンスを実行します。
+    コマンド内の `x`, `y`, `z` はマーカー座標系として解釈されます。
     指定された座標(mm)に対して、自動的にロボットベース座標系へのオフセットを加算して実行します。
     
     【座標変換】
@@ -343,8 +373,41 @@ TOOL_DOCS = {
     """,
         'get_robot_status': "ロボットアームの現在の状態（TCP座標、各関節の角度など）を取得します。\n動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。",
         'get_joypad_state': "現在のジョイパッドの入力状態（各軸の値）を取得します。\n戻り値 (JSON): {\"X\": float, \"Y\": float, \"RX\": float, \"RY\": float}",
-        'get_live_image': "カメラから歪み補正済みのライブ映像や物体検出結果を取得します。\n返り値は `{\"image_jpeg_base64\": \"...\", \"detections\": [...]}` という形式のJSON文字列です。\n\nArgs:\n    visualize_axes (bool): Trueの場合、画像に座標軸を描画します。\n    detect_objects (bool): Trueの場合、物体検出を行い、バウンディングボックス情報を返します（画像への描画は行いません）。\n    confidence (float): 検出の信頼度しきい値 (デフォルト0.7)。\n    return_image (bool): Trueの場合、Base64エンコードされた画像を返します。Falseの場合、検出結果のみを返します。",
-        'convert_image_coords_to_world': "歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の\n実世界座標(x, y) [mm] に変換します。\nこのツールは、画像上でユーザーがクリックした点などを、ロボットが目標とすべき物理座標に変換するために不可欠です。\n\n【前提条件】\n- この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。\n- マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。\n\nArgs:\n    u (int): 変換したい画像の水平方向（横軸）のピクセル座標。\n    v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。\n\nReturns:\n    変換に成功した場合: `{\"x\": float, \"y\": float, \"z\": 0.0, \"xw\": float, \"yw\": float}` という形式のJSON文字列。\n    - x, y: マーカー座標系（マーカー原点）での座標 (mm)\n    - xw, yw: ロボットベース座標系での座標 (mm)。アーム操作(execute_sequence)にはこの値を使用してください。\n    変換に失敗した場合: 失敗理由を示すエラーメッセージ文字列。",
+        'get_live_image': """
+    カメラから歪み補正済みのライブ映像や物体検出結果を取得します。
+    返り値は `{"image_jpeg_base64": "...", "detections": [...]}` という形式のJSON文字列です。
+
+    【座標系とパラメータの定義】
+    - **x, y, z**: ArUcoマーカー座標系（マーカー原点）での3次元座標 (mm)。
+    - **xw, yw, zw**: ロボットベース座標系（ロボット原点）での3次元座標 (mm)。`execute_sequence` での移動指令にはこの値を使用します。
+    - **r**: 物体の推定半径 (mm)。
+    - **u, v**: 画像上のピクセル座標 (px)。
+    - **u_norm, v_norm**: 画像サイズを0-1000に正規化した座標。
+    - **radius_u_norm, radius_v_norm**: 正規化された画像上の半径（幅・高さ）。
+
+    `detect_objects=True` の場合、検出された物体情報の `ground_center` に上記座標が含まれます。
+
+    Args:
+        visualize_axes (bool): Trueの場合、画像に座標軸を描画します。
+        detect_objects (bool): Trueの場合、物体検出を行います。
+        confidence (float): 検出の信頼度しきい値 (デフォルト0.7)。
+        return_image (bool): Trueの場合、Base64エンコードされた画像を返します。Falseの場合、検出結果のみを返します。
+    """,
+        'convert_image_coords_to_world': """
+    歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の実世界座標に変換します。
+
+    【戻り値 (JSON)】
+    - **x, y**: ArUcoマーカー座標系での座標 (mm)。
+    - **xw, yw**: ロボットベース座標系での座標 (mm)。アーム操作(execute_sequence)にはこの値を使用してください。
+
+    【前提条件】
+    - この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。
+    - マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。
+
+    Args:
+        u (int): 変換したい画像の水平方向（横軸）のピクセル座標。
+        v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。
+    """,
         'set_pick_place_points': "VisionSystemにPick位置とPlace位置を設定し、ストリーミング映像への軌道描画を有効にします。\n座標はマーカー座標系(mm)です。",
         'clear_pick_place_points': "VisionSystemに設定されたPick/Place位置をクリアし、軌道描画を無効にします。"
     }

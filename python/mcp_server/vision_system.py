@@ -33,7 +33,7 @@ class VisionSystem:
 
         # UI Text Resources
         self.text = {
-            'ja': {'quit': '終了', 'clear': 'クリア', 'capture': '撮影', 'run': '実行', 'pick': 'Pick', 'place': 'Place'},
+            'ja': {'quit': 'Quit', 'clear': 'Clear', 'capture': 'Capture', 'run': 'Run P&P', 'pick': 'Pick', 'place': 'Place'},
             'en': {'quit': 'Quit', 'clear': 'Clear', 'capture': 'Capture', 'run': 'Run P&P', 'pick': 'Pick', 'place': 'Place'}
         }
         self.t = self.text.get(lang, self.text['ja'])
@@ -235,6 +235,154 @@ class VisionSystem:
         _, buffer = cv2.imencode('.jpg', frame)
         return buffer.tobytes()
 
+    def _estimate_cylinder_3d(self, box_norm):
+        """
+        広角カメラによる円柱の接地中心推定（5ステップ）
+
+        本設計では、対象物はすべて「垂直に立つ円柱」であると仮定し、
+        その幾何学的特性を利用して広角レンズ周辺部での歪みや倒れ込みを補正します。
+
+        戻り値の座標系:
+            ArUcoマーカーの右下を原点とする「マーカー座標系」です。
+            単位はミリメートル(mm)です。
+
+        戻り値の要素:
+            x: マーカー座標系における円柱底面中心のX座標 (mm)
+            y: マーカー座標系における円柱底面中心のY座標 (mm)
+            z: マーカー座標系における高さ (mm)。接地面のため常に 0.0 となります。
+            r: 推定された円柱の半径 (mm)
+            u_norm: 画像上の円柱底面中心の正規化U座標 (0-1000)
+            v_norm: 画像上の円柱底面中心の正規化V座標 (0-1000)
+            radius_u_norm: 画像上の円柱半径の正規化U幅 (0-1000)
+            radius_v_norm: 画像上の円柱半径の正規化V高さ (0-1000)
+        """
+        if self.rvec is None or self.tvec is None:
+            return None
+
+        # 画像サイズ
+        h_img, w_img = self.last_processed_frame.shape[:2]
+        
+        # BB座標 (ピクセル)
+        ymin, xmin, ymax, xmax = box_norm
+        u_min, v_min = xmin * w_img / 1000, ymin * h_img / 1000
+        u_max, v_max = xmax * w_img / 1000, ymax * h_img / 1000
+        
+        u_c = (u_min + u_max) / 2
+        v_bottom = v_max
+        w_px = u_max - u_min
+        
+        # カメラパラメータ
+        fx = self.mtx[0, 0]
+        fy = self.mtx[1, 1]
+        cx = self.mtx[0, 2]
+        cy = self.mtx[1, 2]
+        
+        # 手順2: 画像上の「正しい接地点」を特定する (内側への補正)
+        # 画面中心からの距離に応じてスライド量を動的に決定します。
+        # 中心に近いほど補正は小さく、周辺ほど大きくします。
+        dx = (u_c - cx) / (w_img / 2)
+        dy = (v_bottom - cy) / (h_img / 2)
+        dist_from_center = np.sqrt(dx*dx + dy*dy) # 0.0 ~ 1.414...
+        slide_factor = 0.1 * dist_from_center
+        u_contact = u_c + (cx - u_c) * slide_factor
+        v_contact = v_bottom
+        
+        # 手順3: 足元の位置から「距離」を算出する
+        # 手順1で得たカメラ姿勢(update_poseで取得済み)と、手順2で特定した点の位置関係から計算します。
+        # convert_2d_to_3d を使用して Z=0 平面との交点を求めることで、
+        # カメラからその地点までの現実の水平距離（L）を導き出します。
+        coords, _ = self.convert_2d_to_3d(u_contact, v_contact, rvec=self.rvec, tvec=self.tvec)
+        if not coords:
+            return None
+            
+        P_ground = np.array([coords['x'], coords['y'], 0.0])
+        
+        # カメラ位置 (World)
+        C_pos = self.camera_pos
+        
+        # カメラから接地点までの直線距離 D
+        D = np.linalg.norm(P_ground - C_pos)
+        
+        # 手順4: BBの「太り」を補正し、真の半径を出す (幾何補正)
+        # 接地点における鉛直軸（World Z軸）を画像上に投影し、その傾きを計算します。
+        # 円柱が画像上で傾いている場合、AABB（軸平行BB）の幅は本来の幅よりも広がります (W_aabb = W / cos(theta))。
+        # これを補正するために cos(theta) を掛けます。
+        
+        # 接地点 P_ground と、その直上 100mm の点 P_top を画像に投影
+        P_top = P_ground + np.array([0, 0, 100.0])
+        pts_3d = np.array([P_ground, P_top], dtype=np.float32)
+        pts_2d, _ = cv2.projectPoints(pts_3d, self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+        p_g_2d = pts_2d[0][0]
+        p_t_2d = pts_2d[1][0]
+        
+        # 画像上での垂直軸ベクトル
+        vec_v = p_t_2d - p_g_2d
+        # 垂直軸の傾き角 theta (画像縦軸に対する角度)
+        # vec_v が (0, -1) 方向なら theta=0
+        norm_v = np.linalg.norm(vec_v)
+        if norm_v < 1e-6:
+            cos_theta = 1.0 # 垂直軸が点として映る（真上）場合は補正なし
+        else:
+            # 画像Y軸(下向き)と、投影された上向きベクトル(p_t - p_g)のなす角...ではなく、
+            # AABBの幅(横方向)に対する補正なので、垂直線がどれだけ「横に寝ているか」を見ます。
+            # 垂直線と画像Y軸のなす角の余弦
+            unit_v = vec_v / norm_v
+            # 画像上ではYは下向き、Z(上)への投影は通常上向き(-Y)。
+            # 内積をとって絶対値
+            cos_theta = abs(np.dot(unit_v, np.array([0, -1])))
+            
+        # 傾きによる幅の広がりを補正 (W_real = W_aabb * cos_theta)
+        # さらに、俯角による上面の広がり(fat_correction)も適用
+        # 上面が底面より大きく写るパースペクティブ効果を補正 (0.85程度が目安)
+        fat_correction = 0.85
+        w_corrected = w_px * cos_theta
+        
+        # 視野角による太り補正 (Anamorphic correction)
+        # 画面周辺部では物体が引き伸ばされて写るため、cos(alpha)を掛けて補正する
+        v_c_px = (ymin + ymax) * h_img / 1000 / 2
+        tan2_alpha = ((u_c - cx) / fx)**2 + ((v_c_px - cy) / fy)**2
+        cos_alpha = 1.0 / np.sqrt(1 + tan2_alpha)
+        
+        r = (w_corrected * D / (2 * fx)) * fat_correction * cos_alpha
+        
+        # 手順5: 半径分だけ奥へ進めて「中心」を特定する
+        # 円柱の「手前の縁」から「底面の中央」へと座標を移動させます。
+        # 手順3で求めた「現実の接地座標」から、カメラの視線と反対方向（奥側）へ、
+        # 手順4で算出した半径 r の分だけ並進移動させます。
+        C_ground = np.array([C_pos[0], C_pos[1], 0.0])
+        vec_cam_to_contact = P_ground - C_ground
+        direction = vec_cam_to_contact / (np.linalg.norm(vec_cam_to_contact) + 1e-6)
+        P_center = P_ground + direction * r
+
+        # 3D座標を2D画像座標(u, v)に再投影 (クライアント側描画用)
+        # 画像は歪み補正済みなので、歪み係数は0として投影する
+        imgpts, _ = cv2.projectPoints(np.array([P_center], dtype=np.float32), self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+        u_center, v_center = imgpts[0][0].astype(int)
+        
+        # 0-1000正規化座標 (クライアント描画用)
+        u_norm = int((u_center / w_img) * 1000)
+        v_norm = int((v_center / h_img) * 1000)
+
+        # 半径のピクセル換算 (クライアント描画用)
+        # 推定された実半径 r (mm) を、距離 D に基づいて画像上のピクセルサイズに逆投影します
+        # r_px = (r * fx) / D
+        radius_px = (r * fx) / D
+
+        # 視線角度による楕円化 (見かけの縦半径を圧縮)
+        # カメラの光軸(Z)とワールドZ軸の内積から、見下ろし角の余弦を計算
+        # self.R は World -> Camera 回転行列。
+        # World Z軸 (0,0,1) の Camera座標系でのベクトルは R * (0,0,1)^T = Rの3列目
+        # Camera Z軸 (0,0,1) との内積は、Rの3列目のZ成分 (R[2, 2])
+        # ただし、カメラ座標系はZが前方。
+        view_cos = abs(self.R[2, 2]) if self.R is not None else 0.5
+        
+        # 0-1000正規化半径 (クライアント描画用)
+        # 縦方向(v)は視線角度(view_cos)分だけ潰れて見える
+        radius_u_norm = (radius_px / w_img) * 1000
+        radius_v_norm = (radius_px * view_cos / h_img) * 1000
+        
+        return {"x": float(P_center[0]), "y": float(P_center[1]), "z": 0.0, "r": float(r), "u_norm": u_norm, "v_norm": v_norm, "radius_u_norm": float(radius_u_norm), "radius_v_norm": float(radius_v_norm)}
+
     def detect_objects(self, model, confidence=0.7):
         """
         YOLOモデルを使用して、現在のフレームから物体検出を行います。
@@ -271,7 +419,15 @@ class VisionSystem:
                 (y2 / h) * 1000,
                 (x2 / w) * 1000
             ]
-            detections.append({"label": label, "confidence": conf, "box_2d": norm_box})
+            
+            det = {"label": label, "confidence": conf, "box_2d": norm_box}
+            
+            # 円柱としての3D位置推定
+            cyl_3d = self._estimate_cylinder_3d(norm_box)
+            if cyl_3d:
+                det["ground_center"] = cyl_3d
+            
+            detections.append(det)
             
         return detections
 
