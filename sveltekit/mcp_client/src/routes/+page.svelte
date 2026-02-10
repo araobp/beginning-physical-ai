@@ -25,6 +25,7 @@
   let targetWorldCoords = $state<{ x: number, y: number } | null>(null);
   let detectedObjects = $state<any[]>([]);
   let visualizeAxes = $state(true);
+  let detectionConfidence = $state(0.7);
 
   // Pick & Place State
   let ppImage = $state<string | null>(null);
@@ -101,6 +102,7 @@
       gemini_placeholder: "Gemini Robotics-ER や Gemini Live によるVLA評価画面追加予定",
       show_detections: "物体検出",
       interval_ms: "更新間隔(ms)",
+      confidence: "信頼度",
     },
     en: {
       title: "The Cheapest 4-DoF Robot Arm",
@@ -132,6 +134,7 @@
       gemini_placeholder: "Gemini Robotics-ER or Gemini Live VLA evaluation screen coming soon",
       show_detections: "Object Detection",
       interval_ms: "Interval (ms)",
+      confidence: "Confidence",
     }
   };
 
@@ -223,9 +226,10 @@
               const parsed = JSON.parse(content.text);
               if (parsed.image_jpeg_base64) {
                 image = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
-                // If the response also contains coordinates, add them to the text output
-                if (typeof parsed.x === 'number') {
-                  text += `Coordinates: x=${parsed.x.toFixed(1)}, y=${parsed.y.toFixed(1)}\n`;
+                // 画像以外のデータをJSONテキストとして表示
+                const { image_jpeg_base64, ...rest } = parsed;
+                if (Object.keys(rest).length > 0) {
+                  text += JSON.stringify(rest, null, 2) + "\n";
                 }
                 continue;
               }
@@ -317,7 +321,7 @@
           arguments: { 
             visualize_axes: visualizeAxes,
             detect_objects: true,
-            confidence: 0.5
+            confidence: Number(detectionConfidence)
           }
         }),
         headers: { 'Content-Type': 'application/json' }
@@ -757,7 +761,7 @@
                 arguments: { 
                     detect_objects: true,
                     return_image: false, // Only get detections
-                    confidence: 0.5 
+                    confidence: Number(detectionConfidence) 
                 }
             }),
             headers: { 'Content-Type': 'application/json' }
@@ -1024,6 +1028,10 @@
               <input class="form-check-input" type="checkbox" id="visualizeAxesCheck" bind:checked={visualizeAxes}>
               <label class="form-check-label" for="visualizeAxesCheck">Axes</label>
             </div>
+            <div class="input-group input-group-sm" style="width: auto;">
+              <span class="input-group-text">{t.confidence}</span>
+              <input type="number" class="form-control" style="width: 60px;" bind:value={detectionConfidence} min="0.1" max="1.0" step="0.1">
+            </div>
             <button class="btn btn-primary" onclick={captureImage} disabled={capturing}>
               {capturing ? t.capturing : t.capture}
             </button>
@@ -1098,7 +1106,11 @@
             </div>
             <div class="input-group input-group-sm" style="width: auto;">
                 <span class="input-group-text">{t.interval_ms}</span>
-                <input type="number" class="form-control" style="width: 80px;" bind:value={ppDetectionInterval} disabled={!ppShowDetections}>
+                <input type="text" class="form-control" style="width: 60px;" bind:value={ppDetectionInterval} disabled={!ppShowDetections}>
+            </div>
+            <div class="input-group input-group-sm" style="width: auto;">
+                <span class="input-group-text">{t.confidence}</span>
+                <input type="number" class="form-control" style="width: 60px;" bind:value={detectionConfidence} min="0.1" max="1.0" step="0.1" disabled={!ppShowDetections}>
             </div>
             <button class="btn btn-secondary" onclick={clearPPPoints} disabled={ppExecuting}>
               {t.clear}
@@ -1106,18 +1118,14 @@
             <button class="btn btn-success" onclick={runPickAndPlace} disabled={!ppPickPoint || !ppPlacePoint || ppExecuting}>
               {ppExecuting ? t.running : t.pick_place}
             </button>
-            
+
             <div class="input-group input-group-sm" style="width: auto;">
-                <span class="input-group-text">{t.pick_z}</span>
-                <input type="number" class="form-control" style="width: 70px;" bind:value={ppPickZ}>
-            </div>
-            <div class="input-group input-group-sm" style="width: auto;">
-                <span class="input-group-text">{t.place_z}</span>
-                <input type="number" class="form-control" style="width: 70px;" bind:value={ppPlaceZ}>
-            </div>
-            <div class="input-group input-group-sm" style="width: auto;">
-                <span class="input-group-text">{t.safety_z}</span>
-                <input type="number" class="form-control" style="width: 70px;" bind:value={ppSafetyZ}>
+                <span class="input-group-text px-1">Pick</span>
+                <input type="number" class="form-control px-1" style="width: 55px;" bind:value={ppPickZ}>
+                <span class="input-group-text px-1">Place</span>
+                <input type="number" class="form-control px-1" style="width: 55px;" bind:value={ppPlaceZ}>
+                <span class="input-group-text px-1">Safe</span>
+                <input type="number" class="form-control px-1" style="width: 55px;" bind:value={ppSafetyZ}>
             </div>
           </div>
           

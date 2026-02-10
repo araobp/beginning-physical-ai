@@ -235,7 +235,7 @@ class VisionSystem:
         _, buffer = cv2.imencode('.jpg', frame)
         return buffer.tobytes()
 
-    def detect_objects(self, model, confidence=0.5):
+    def detect_objects(self, model, confidence=0.7):
         """
         YOLOモデルを使用して、現在のフレームから物体検出を行います。
         
@@ -264,7 +264,7 @@ class VisionSystem:
             label = result.names[cls_id]
             conf = float(box.conf[0])
             
-            # VisionSystem.draw_detections 用に 0-1000 スケールに正規化
+            # クライアント側描画用に 0-1000 スケールに正規化
             norm_box = [
                 (y1 / h) * 1000,
                 (x1 / w) * 1000,
@@ -274,56 +274,6 @@ class VisionSystem:
             detections.append({"label": label, "confidence": conf, "box_2d": norm_box})
             
         return detections
-
-    def _draw_detections_overlay(self, frame, detections):
-        """フレームに検出結果を描画する（内部ヘルパー）"""
-        h, w = frame.shape[:2]
-        for det in detections:
-            label = str(det.get("label", "Object"))
-            conf = det.get("confidence", None)
-            box = det.get("box_2d")
-            
-            # バウンディングボックスの描画
-            if box and len(box) == 4:
-                ymin, xmin, ymax, xmax = box
-                # 0-1000 scale to pixel
-                x1 = int(xmin * w / 1000)
-                y1 = int(ymin * h / 1000)
-                x2 = int(xmax * w / 1000)
-                y2 = int(ymax * h / 1000)
-                
-                color = (0, 255, 0) # Green
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                
-                text = label
-                if conf is not None:
-                    text += f" {conf:.2f}"
-                cv2.putText(frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-            # 把持ポイント/接地点の描画
-            point = det.get("ground_contact_point_2d")
-            if point and len(point) == 2:
-                py, px = point
-                cx = int(px * w / 1000)
-                cy = int(py * h / 1000)
-                cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1) # Red dot
-
-    def draw_detections(self, detections):
-        """
-        キャッシュされた最新フレームに検出結果（バウンディングボックス、ラベル、把持点）を描画してBase64画像を返す。
-        
-        Args:
-            detections (list): 検出オブジェクトのリスト。
-                各要素は {"label": str, "box_2d": [ymin, xmin, ymax, xmax], "ground_contact_point_2d": [y, x]} などを想定。
-                座標は 0-1000 の正規化座標。
-        """
-        if self.last_processed_frame is None:
-            return None
-
-        frame = self.last_processed_frame.copy()
-        self._draw_detections_overlay(frame, detections)
-        _, buffer = cv2.imencode('.jpg', frame)
-        return base64.b64encode(buffer).decode('utf-8')
 
     def convert_2d_to_3d(self, u, v, draw_target=False, rvec=None, tvec=None):
         """

@@ -289,7 +289,7 @@ TOOL_DOCS = {
     """,
         'get_robot_status': "Retrieves the current status of the robot arm (TCP coordinates, joint angles, etc.). Use this to understand the arm's current position before planning movements.",
         'get_joypad_state': "Retrieves the current input state (axis values) of the joypad. Returns JSON: {'X': float, 'Y': float, 'RX': float, 'RY': float}",
-        'get_live_image': "Captures a live frame and/or detects objects. Returns JSON `{'image_jpeg_base64': '...', 'detections': [...]}`. Args: visualize_axes (bool): If True, draws coordinate axes on the image. detect_objects (bool): If True, runs object detection. confidence (float): Confidence threshold for detection (default 0.5). return_image (bool): If True, returns the Base64 encoded image. If False, returns only detection results.",
+        'get_live_image': "Captures a live frame and/or detects objects. Returns JSON `{'image_jpeg_base64': '...', 'detections': [...]}`. Args: visualize_axes (bool): If True, draws coordinate axes on the image. detect_objects (bool): If True, runs object detection and returns bounding box data (does not draw on image). confidence (float): Confidence threshold for detection (default 0.7). return_image (bool): If True, returns the Base64 encoded image. If False, returns only detection results.",
         'convert_image_coords_to_world': "Converts pixel coordinates (u, v) from the undistorted image to real-world coordinates (x, y) [mm] on the robot's working plane (Z=0). Essential for converting user clicks on the image to physical coordinates for the robot. Prerequisites: ArUco marker must be visible. Args: u (int), v (int). Returns JSON with x, y (marker coords), xw, yw (robot coords).",
         'set_pick_place_points': "Sets Pick/Place positions and Z heights (pick, place, safety) in the VisionSystem to enable trajectory drawing. Coordinates are in Marker Coordinate System (mm).",
         'clear_pick_place_points': "Clears Pick/Place positions set in the VisionSystem and disables trajectory drawing."
@@ -343,7 +343,7 @@ TOOL_DOCS = {
     """,
         'get_robot_status': "ロボットアームの現在の状態（TCP座標、各関節の角度など）を取得します。\n動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。",
         'get_joypad_state': "現在のジョイパッドの入力状態（各軸の値）を取得します。\n戻り値 (JSON): {\"X\": float, \"Y\": float, \"RX\": float, \"RY\": float}",
-        'get_live_image': "カメラから歪み補正済みのライブ映像や物体検出結果を取得します。\n返り値は `{\"image_jpeg_base64\": \"...\", \"detections\": [...]}` という形式のJSON文字列です。\n\nArgs:\n    visualize_axes (bool): Trueの場合、画像に座標軸を描画します。\n    detect_objects (bool): Trueの場合、物体検出を行います。\n    confidence (float): 検出の信頼度しきい値 (デフォルト0.5)。\n    return_image (bool): Trueの場合、Base64エンコードされた画像を返します。Falseの場合、検出結果のみを返します。",
+        'get_live_image': "カメラから歪み補正済みのライブ映像や物体検出結果を取得します。\n返り値は `{\"image_jpeg_base64\": \"...\", \"detections\": [...]}` という形式のJSON文字列です。\n\nArgs:\n    visualize_axes (bool): Trueの場合、画像に座標軸を描画します。\n    detect_objects (bool): Trueの場合、物体検出を行い、バウンディングボックス情報を返します（画像への描画は行いません）。\n    confidence (float): 検出の信頼度しきい値 (デフォルト0.7)。\n    return_image (bool): Trueの場合、Base64エンコードされた画像を返します。Falseの場合、検出結果のみを返します。",
         'convert_image_coords_to_world': "歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の\n実世界座標(x, y) [mm] に変換します。\nこのツールは、画像上でユーザーがクリックした点などを、ロボットが目標とすべき物理座標に変換するために不可欠です。\n\n【前提条件】\n- この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。\n- マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。\n\nArgs:\n    u (int): 変換したい画像の水平方向（横軸）のピクセル座標。\n    v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。\n\nReturns:\n    変換に成功した場合: `{\"x\": float, \"y\": float, \"z\": 0.0, \"xw\": float, \"yw\": float}` という形式のJSON文字列。\n    - x, y: マーカー座標系（マーカー原点）での座標 (mm)\n    - xw, yw: ロボットベース座標系での座標 (mm)。アーム操作(execute_sequence)にはこの値を使用してください。\n    変換に失敗した場合: 失敗理由を示すエラーメッセージ文字列。",
         'set_pick_place_points': "VisionSystemにPick位置とPlace位置を設定し、ストリーミング映像への軌道描画を有効にします。\n座標はマーカー座標系(mm)です。",
         'clear_pick_place_points': "VisionSystemに設定されたPick/Place位置をクリアし、軌道描画を無効にします。"
@@ -411,7 +411,7 @@ def get_joypad_state() -> str:
 
 @mcp.tool()
 @set_doc(DOCS['get_live_image'])
-def get_live_image(visualize_axes: bool = True, detect_objects: bool = False, confidence: float = 0.5, return_image: bool = True) -> str:
+def get_live_image(visualize_axes: bool = True, detect_objects: bool = False, confidence: float = 0.7, return_image: bool = True) -> str:
     vs = get_vision_system()
     if not vs:
         return "Error: Vision system is not available."
@@ -433,7 +433,7 @@ def get_live_image(visualize_axes: bool = True, detect_objects: bool = False, co
         resp["detections"] = detections
     
     if return_image:
-        base64_image = vs.get_undistorted_image_base64()
+        base64_image = vs.get_undistorted_image_base64() # クライアント側で描画するため、サーバーでは描画しない
         if base64_image:
             resp["image_jpeg_base64"] = base64_image
         elif not resp: # 画像も検出結果もない場合

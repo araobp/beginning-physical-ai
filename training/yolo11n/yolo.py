@@ -108,7 +108,7 @@ def main():
     parser.add_argument("--width", type=int, default=1280, help="Frame width")
     parser.add_argument("--height", type=int, default=720, help="Frame height")
     parser.add_argument("--device", type=str, default="mps", help="Device (mps, cpu, cuda)")
-    parser.add_argument("--conf", type=float, default=0.5, help="Confidence threshold")
+    parser.add_argument("--conf", type=float, default=0.7, help="Confidence threshold")
     args = parser.parse_args()
 
     try:
