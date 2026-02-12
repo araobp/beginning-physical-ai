@@ -239,149 +239,224 @@ class VisionSystem:
         """
         広角カメラによる円柱の接地中心推定（5ステップ）
 
-        本設計では、対象物はすべて「垂直に立つ円柱」であると仮定し、
-        その幾何学的特性を利用して広角レンズ周辺部での歪みや倒れ込みを補正します。
+        本設計では、対象物はすべて「垂直に立つ円柱」であると仮定します。
+        カメラのロール・ヨー・ピッチがいかなる角度であっても対応するため、
+        World Z軸（鉛直方向）の画像への投影ベクトルを基準に、
+        AABBの境界との交点から接地点と天面点を特定します。
 
         戻り値の座標系:
             ArUcoマーカーの右下を原点とする「マーカー座標系」です。
             単位はミリメートル(mm)です。
-
-        戻り値の要素:
-            x: マーカー座標系における円柱底面中心のX座標 (mm)
-            y: マーカー座標系における円柱底面中心のY座標 (mm)
-            z: マーカー座標系における高さ (mm)。接地面のため常に 0.0 となります。
-            r: 推定された円柱の半径 (mm)
-            u_norm: 画像上の円柱底面中心の正規化U座標 (0-1000)
-            v_norm: 画像上の円柱底面中心の正規化V座標 (0-1000)
-            radius_u_norm: 画像上の円柱半径の正規化U幅 (0-1000)
-            radius_v_norm: 画像上の円柱半径の正規化V高さ (0-1000)
         """
         if self.rvec is None or self.tvec is None:
             return None
 
         # 画像サイズ
         h_img, w_img = self.last_processed_frame.shape[:2]
+        fx, fy = self.mtx[0, 0], self.mtx[1, 1]
+        cx, cy = self.mtx[0, 2], self.mtx[1, 2]
         
         # BB座標 (ピクセル)
         ymin, xmin, ymax, xmax = box_norm
         u_min, v_min = xmin * w_img / 1000, ymin * h_img / 1000
         u_max, v_max = xmax * w_img / 1000, ymax * h_img / 1000
         
+        # AABB中心
         u_c = (u_min + u_max) / 2
-        v_bottom = v_max
-        w_px = u_max - u_min
+        v_c = (v_min + v_max) / 2
         
-        # カメラパラメータ
-        fx = self.mtx[0, 0]
-        fy = self.mtx[1, 1]
-        cx = self.mtx[0, 2]
-        cy = self.mtx[1, 2]
+        # --- 1. 画像上の「鉛直上方向」ベクトルを算出 ---
+        # AABB中心に対応する視線ベクトル(カメラ座標系)
+        # Z=1 平面上の点として扱う
+        p_center_cam = np.array([(u_c - cx) / fx, (v_c - cy) / fy, 1.0])
         
-        # 手順2: 画像上の「正しい接地点」を特定する (内側への補正)
-        # 画面中心からの距離に応じてスライド量を動的に決定します。
-        # 中心に近いほど補正は小さく、周辺ほど大きくします。
-        dx = (u_c - cx) / (w_img / 2)
-        dy = (v_bottom - cy) / (h_img / 2)
-        dist_from_center = np.sqrt(dx*dx + dy*dy) # 0.0 ~ 1.414...
-        slide_factor = 0.1 * dist_from_center
-        u_contact = u_c + (cx - u_c) * slide_factor
-        v_contact = v_bottom
+        # World Z軸 (0,0,1) のカメラ座標系ベクトル (Rの第3列)
+        axis_z_cam = self.R[:, 2]
         
-        # 手順3: 足元の位置から「距離」を算出する
-        # 手順1で得たカメラ姿勢(update_poseで取得済み)と、手順2で特定した点の位置関係から計算します。
-        # convert_2d_to_3d を使用して Z=0 平面との交点を求めることで、
-        # カメラからその地点までの現実の水平距離（L）を導き出します。
-        coords, _ = self.convert_2d_to_3d(u_contact, v_contact, rvec=self.rvec, tvec=self.tvec)
-        if not coords:
-            return None
+        # 視線上の点から、World Z方向に少し移動した点を画像に投影し、方向を得る
+        # p_up_cam = p_center_cam + axis_z_cam * alpha
+        p_up_cam = p_center_cam + axis_z_cam * 0.1
+        
+        dir_up = np.array([0.0, -1.0]) # デフォルトは画像上方向(-Y)
+        
+        if p_up_cam[2] > 1e-3: # カメラの前方にある場合
+            u_up = p_up_cam[0] / p_up_cam[2] * fx + cx
+            v_up = p_up_cam[1] / p_up_cam[2] * fy + cy
+            vec = np.array([u_up - u_c, v_up - v_c])
+            norm = np.linalg.norm(vec)
+            if norm > 1e-3:
+                dir_up = vec / norm
+
+        dir_down = -dir_up
+        
+        # --- 2. AABB境界との交点を計算 (Bottom, Top, Width) ---
+        def get_dist_to_boundary(start_u, start_v, direction):
+            du, dv = direction
+            ts = []
+            # u = u_min
+            if abs(du) > 1e-6:
+                t = (u_min - start_u) / du
+                if t > 0: ts.append(t)
+                t = (u_max - start_u) / du
+                if t > 0: ts.append(t)
+            # v = v_min
+            if abs(dv) > 1e-6:
+                t = (v_min - start_v) / dv
+                if t > 0: ts.append(t)
+                t = (v_max - start_v) / dv
+                if t > 0: ts.append(t)
             
-        P_ground = np.array([coords['x'], coords['y'], 0.0])
+            return min(ts) if ts else 0.0
+
+        # Bottom (接地点方向)
+        t_bottom = get_dist_to_boundary(u_c, v_c, dir_down)
+        u_contact = u_c + dir_down[0] * t_bottom
+        v_contact = v_c + dir_down[1] * t_bottom
         
-        # カメラ位置 (World)
-        C_pos = self.camera_pos
+        # Top (天面方向)
+        t_top = get_dist_to_boundary(u_c, v_c, dir_up)
+        u_top = u_c + dir_up[0] * t_top
+        v_top = v_c + dir_up[1] * t_top
         
-        # カメラから接地点までの直線距離 D
-        D = np.linalg.norm(P_ground - C_pos)
+        # --- 3. 直径(Width)の推定 ---
+        # AABBの幅・高さと、円筒軸の傾きから直径を逆算する
+        aabb_w = u_max - u_min
+        aabb_h = v_max - v_min
         
-        # 手順4: BBの「太り」を補正し、真の半径を出す (幾何補正)
-        # 接地点における鉛直軸（World Z軸）を画像上に投影し、その傾きを計算します。
-        # 円柱が画像上で傾いている場合、AABB（軸平行BB）の幅は本来の幅よりも広がります (W_aabb = W / cos(theta))。
-        # これを補正するために cos(theta) を掛けます。
+        # 円筒軸の傾き成分 (C: 横成分, S: 縦成分)
+        # dir_up は画像上の円筒軸ベクトル(正規化済み)
+        C = abs(dir_up[0])
+        S = abs(dir_up[1])
         
-        # 接地点 P_ground と、その直上 100mm の点 P_top を画像に投影
-        P_top = P_ground + np.array([0, 0, 100.0])
-        pts_3d = np.array([P_ground, P_top], dtype=np.float32)
-        pts_2d, _ = cv2.projectPoints(pts_3d, self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
-        p_g_2d = pts_2d[0][0]
-        p_t_2d = pts_2d[1][0]
-        
-        # 画像上での垂直軸ベクトル
-        vec_v = p_t_2d - p_g_2d
-        # 垂直軸の傾き角 theta (画像縦軸に対する角度)
-        # vec_v が (0, -1) 方向なら theta=0
-        norm_v = np.linalg.norm(vec_v)
-        if norm_v < 1e-6:
-            cos_theta = 1.0 # 垂直軸が点として映る（真上）場合は補正なし
+        # 解析的推定: D = |H*C - W*S| / |C^2 - S^2|
+        # 45度付近(|C^2 - S^2| ≈ 0)では不安定になるため、重み付けでフォールバックする
+        denom = abs(C**2 - S**2)
+        if denom > 1e-2:
+            D_poly = abs(aabb_h * C - aabb_w * S) / denom
         else:
-            # 画像Y軸(下向き)と、投影された上向きベクトル(p_t - p_g)のなす角...ではなく、
-            # AABBの幅(横方向)に対する補正なので、垂直線がどれだけ「横に寝ているか」を見ます。
-            # 垂直線と画像Y軸のなす角の余弦
-            unit_v = vec_v / norm_v
-            # 画像上ではYは下向き、Z(上)への投影は通常上向き(-Y)。
-            # 内積をとって絶対値
-            cos_theta = abs(np.dot(unit_v, np.array([0, -1])))
-            
-        # 傾きによる幅の広がりを補正 (W_real = W_aabb * cos_theta)
-        # さらに、俯角による上面の広がり(fat_correction)も適用
-        # 上面が底面より大きく写るパースペクティブ効果を補正 (0.85程度が目安)
-        fat_correction = 0.85
-        w_corrected = w_px * cos_theta
+            D_poly = min(aabb_w, aabb_h)
         
-        # 視野角による太り補正 (Anamorphic correction)
-        # 画面周辺部では物体が引き伸ばされて写るため、cos(alpha)を掛けて補正する
-        v_c_px = (ymin + ymax) * h_img / 1000 / 2
-        tan2_alpha = ((u_c - cx) / fx)**2 + ((v_c_px - cy) / fy)**2
+        # クランプ: 直径はAABBの短辺より大きくなることはない
+        D_poly = min(D_poly, aabb_w, aabb_h)
+        
+        # ヒューリスティック推定: 45度付近ではAABBが緩くなるため、細長さを仮定して補正
+        # 0/90度では1.0倍、45度では0.6倍にする
+        heuristic_factor = 1.0 - 0.4 * (2 * C * S)
+        D_heuristic = min(aabb_w, aabb_h) * heuristic_factor
+        
+        # ブレンド: 軸に平行なほど解析解(D_poly)を信頼し、45度に近いほどヒューリスティック(D_heuristic)を使う
+        weight = denom ** 2
+        width_px = weight * D_poly + (1.0 - weight) * D_heuristic
+        
+        # --- 4. 接地位置 (X, Y, 0) の推定 ---
+        # 画像上の接地点 u_contact, v_contact からレイを飛ばす
+        coords, _ = self.convert_2d_to_3d(u_contact, v_contact, rvec=self.rvec, tvec=self.tvec)
+        if not coords: return None
+        P_ground_edge = np.array([coords['x'], coords['y'], 0.0])
+        
+        # カメラ位置
+        C_pos = self.camera_pos
+        dist_cam_obj = np.linalg.norm(P_ground_edge - C_pos)
+        
+        # 半径推定 (簡易版)
+        # 視野角補正 (画面端での伸び)
+        tan2_alpha = ((u_c - cx) / fx)**2 + ((v_c - cy) / fy)**2
         cos_alpha = 1.0 / np.sqrt(1 + tan2_alpha)
         
-        r = (w_corrected * D / (2 * fx)) * fat_correction * cos_alpha
+        # width_px は円筒の直径に相当するとみなす
+        r_est = (width_px * dist_cam_obj / (2 * fx)) * cos_alpha * 0.9 # 0.9は経験的補正
         
-        # 手順5: 半径分だけ奥へ進めて「中心」を特定する
-        # 円柱の「手前の縁」から「底面の中央」へと座標を移動させます。
-        # 手順3で求めた「現実の接地座標」から、カメラの視線と反対方向（奥側）へ、
-        # 手順4で算出した半径 r の分だけ並進移動させます。
-        C_ground = np.array([C_pos[0], C_pos[1], 0.0])
-        vec_cam_to_contact = P_ground - C_ground
-        direction = vec_cam_to_contact / (np.linalg.norm(vec_cam_to_contact) + 1e-6)
-        P_center = P_ground + direction * r
+        # 中心位置補正: P_ground_edge は「手前の縁」。ここから半径分だけ「奥」へずらす。
+        vec_cam_to_pt = P_ground_edge - np.array([C_pos[0], C_pos[1], 0.0])
+        vec_cam_to_pt_norm = np.linalg.norm(vec_cam_to_pt)
+        if vec_cam_to_pt_norm < 1e-3:
+            direction = np.array([1.0, 0.0, 0.0])
+        else:
+            direction = vec_cam_to_pt / vec_cam_to_pt_norm
+            
+        P_center = P_ground_edge + direction * r_est
+        
+        # --- 5. 高さ推定 ---
+        # Top点に対応する視線ベクトル
+        ray_top_cam = np.array([(u_top - cx) / fx, (v_top - cy) / fy, 1.0])
+        ray_top_world = np.dot(self.R.T, ray_top_cam)
+        ray_top_world /= np.linalg.norm(ray_top_world)
+        
+        # 円筒軸の始点 B = P_center, 方向 V = (0,0,1)
+        # 視線の始点 A = C_pos, 方向 U = ray_top_world
+        # 2直線の最接近点のうち、円筒軸上の点のパラメータ h を求める。
+        # 公式: h = ( (A-B)・V - ((A-B)・U)(U・V) ) / ( 1 - (U・V)^2 )
+        
+        B = P_center
+        V = np.array([0.0, 0.0, 1.0])
+        A = C_pos
+        U = ray_top_world
+        
+        AB = A - B
+        UV = np.dot(U, V)
+        denom = 1.0 - UV**2
+        
+        if abs(denom) < 1e-6:
+            h_est = 0.0
+        else:
+            h_est = (np.dot(AB, V) - np.dot(AB, U) * UV) / denom
 
-        # 3D座標を2D画像座標(u, v)に再投影 (クライアント側描画用)
-        # 画像は歪み補正済みなので、歪み係数は0として投影する
+        # --- 高さの補正 ---
+        # AABBの上端(v_min)は円筒上面の「奥側の縁」に対応するため、
+        # そのまま軸との交点を求めると、視線の傾き分だけ高い位置(手前)で交差したと計算されてしまう。
+        # 視線と軸のなす角 phi を用いて、半径 r 分の高さズレを補正する。
+        # delta_h = r * cot(phi)
+        cos_phi = UV
+        sin_phi = np.sqrt(max(0.0, 1.0 - cos_phi**2))
+        
+        # 真上(sin_phi~0)や真横(cos_phi~0)の特異点を避ける
+        if sin_phi > 0.1:
+            # 見下ろし時: cos_phi < 0 -> delta_h < 0 (高さを下げる)
+            # 見上げ時: cos_phi > 0 -> delta_h > 0 (高さを上げる...通常ありえないが)
+            delta_h = r_est * (cos_phi / sin_phi)
+            h_est += delta_h
+
+        # --- 6. 出力値の計算 ---
+        # 3D中心座標を2D画像座標(u, v)に再投影
         imgpts, _ = cv2.projectPoints(np.array([P_center], dtype=np.float32), self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
-        u_center, v_center = imgpts[0][0].astype(int)
-        
-        # 0-1000正規化座標 (クライアント描画用)
-        u_norm = int((u_center / w_img) * 1000)
-        v_norm = int((v_center / h_img) * 1000)
+        u_center_reproj, v_center_reproj = imgpts[0][0]
 
-        # 半径のピクセル換算 (クライアント描画用)
-        # 推定された実半径 r (mm) を、距離 D に基づいて画像上のピクセルサイズに逆投影します
-        # r_px = (r * fx) / D
-        radius_px = (r * fx) / D
+        # 高さ位置の再投影
+        P_top = P_center + np.array([0.0, 0.0, max(0.0, h_est)])
+        imgpts_top, _ = cv2.projectPoints(np.array([P_top], dtype=np.float32), self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+        u_top_reproj, v_top_reproj = imgpts_top[0][0]
+
+        # 0-1000正規化座標
+        u_norm = int(u_center_reproj / w_img * 1000)
+        v_norm = int(v_center_reproj / h_img * 1000)
+        u_top_norm = int(u_top_reproj / w_img * 1000)
+        v_top_norm = int(v_top_reproj / h_img * 1000)
+
+        # 半径のピクセル換算
+        # 推定された実半径 r_est (mm) を、距離に基づいて画像上のピクセルサイズに逆投影します
+        dist_cam_center = np.linalg.norm(P_center - C_pos)
+        radius_px = (r_est * fx) / dist_cam_center if dist_cam_center > 0 else 0
 
         # 視線角度による楕円化 (見かけの縦半径を圧縮)
-        # カメラの光軸(Z)とワールドZ軸の内積から、見下ろし角の余弦を計算
-        # self.R は World -> Camera 回転行列。
-        # World Z軸 (0,0,1) の Camera座標系でのベクトルは R * (0,0,1)^T = Rの3列目
-        # Camera Z軸 (0,0,1) との内積は、Rの3列目のZ成分 (R[2, 2])
-        # ただし、カメラ座標系はZが前方。
         view_cos = abs(self.R[2, 2]) if self.R is not None else 0.5
         
-        # 0-1000正規化半径 (クライアント描画用)
-        # 縦方向(v)は視線角度(view_cos)分だけ潰れて見える
+        # 0-1000正規化半径
         radius_u_norm = (radius_px / w_img) * 1000
         radius_v_norm = (radius_px * view_cos / h_img) * 1000
-        
-        return {"x": float(P_center[0]), "y": float(P_center[1]), "z": 0.0, "r": float(r), "u_norm": u_norm, "v_norm": v_norm, "radius_u_norm": float(radius_u_norm), "radius_v_norm": float(radius_v_norm)}
+
+        return {
+            "x": float(P_center[0]),
+            "y": float(P_center[1]),
+            "z": 0.0,
+            "r": float(r_est),
+            "h": float(max(0.0, h_est)),
+            "u_norm": u_norm,
+            "v_norm": v_norm,
+            "u_top_norm": u_top_norm,
+            "v_top_norm": v_top_norm,
+            "radius_u_norm": float(radius_u_norm),
+            "radius_v_norm": float(radius_v_norm)
+        }
 
     def detect_objects(self, model, confidence=0.7):
         """

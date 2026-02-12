@@ -11,6 +11,7 @@ import serial
 import serial.tools.list_ports
 import time
 import sys
+import csv
 import json
 import base64
 import cv2
@@ -20,6 +21,7 @@ import argparse
 import threading
 import http.server
 import socketserver
+import os
 from vision_system import VisionSystem
 try:
     from ultralytics import YOLO
@@ -114,36 +116,35 @@ gui_queue = queue.Queue()
 # --- 内部ヘルパー関数 ---
 def _fetch_workpiece_data():
     """作業対象物（ワーク）の定義情報を返す"""
-    if LANG == 'en':
-        return {
-            "earplug_case": {
-                "name": "Earplug Case",
-                "height": 43.0,
-                "approach_z_offset": 50.0,
-                "description": "Cylindrical case. Grip at Z=20, move via safety height Z=93 (43+50)."
-            },
-            "base_tray": {
-                "name": "Base Tray",
-                "height": 5.0,
-                "approach_z_offset": 60.0,
-                "description": "Flat tray for placement. Release at Z=5, move at Z=65."
-            }
-        }
-    else:
-        return {
-            "earplug_case": {
-                "name": "耳栓ケース",
-                "height": 43.0,
-                "approach_z_offset": 50.0,
-                "description": "円筒形のケース。Z=20で把持し、移動は安全高度 Z=93 (43+50) を経由してください。"
-            },
-            "base_tray": {
-                "name": "配置トレイ",
-                "height": 5.0,
-                "approach_z_offset": 60.0,
-                "description": "配置用の平坦な面。Z=5で解放、Z=65で移動してください。"
-            }
-        }
+    workpieces = {}
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workpieces.csv")
+    
+    try:
+        with open(csv_path, mode='r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                class_label = row['class_label']
+                # CSVのカラム名に合わせてデータを取得し、欠損値にはデフォルトを設定
+                height_val = float(row.get('gripping_height', 0))
+
+                if LANG == 'en':
+                    workpieces[class_label] = {
+                        "name": row['name_en'],
+                        "gripping_height": height_val,
+                        "description": row['description_en']
+                    }
+                else:
+                    workpieces[class_label] = {
+                        "name": row['name_ja'],
+                        "gripping_height": height_val,
+                        "description": row['description_ja']
+                    }
+    except FileNotFoundError:
+        print(f"Warning: {csv_path} not found. Returning empty catalog.")
+    except Exception as e:
+        print(f"Error reading {csv_path}: {e}")
+        
+    return workpieces
 
 def get_vision_system():
     """
@@ -246,17 +247,16 @@ TOOL_DOCS = {
     Returns a JSON string.
 
     [Instructions for AI]
-    When planning to manipulate objects (e.g., pick and place), **always execute this tool first** to understand the exact "height" and "approach_z_offset" to avoid collisions.
+    When planning to manipulate objects (e.g., pick and place), **always execute this tool first** to understand the exact "gripping_height" to avoid collisions.
 
     [Data Structure Details]
     - name: Name of the workpiece.
-    - height: Physical height of the workpiece (mm). Reference point for lowering the arm.
-    - approach_z_offset: Safety margin (mm) for horizontal movement above the workpiece.
+    - gripping_height: Gripping height of the workpiece (mm). This is the Z coordinate to which the arm should descend to grip the object.
     - description: Supplementary information.
 
     [Important: Formula for Safe Path Planning]
     When moving horizontally with a workpiece, always raise the arm to the "Safety Height" calculated as:
-    Safety Height (Z) = workpiece height + approach_z_offset
+    Safety Height (Z) = gripping_height + 50.0 (Safety Margin)
     """,
         'execute_sequence': """
     Sends a sequence of operations (command sequence) separated by semicolons ';' to the robot arm.
@@ -297,8 +297,10 @@ TOOL_DOCS = {
     - **x, y, z**: Coordinates in ArUco Marker Coordinate System (origin at marker, mm).
     - **xw, yw, zw**: Coordinates in Robot Base Coordinate System (origin at robot base, mm). Use these for `execute_sequence`.
     - **r**: Estimated radius of the object (mm).
+    - **h**: Estimated height of the object (mm).
     - **u, v**: Pixel coordinates on the image (px).
     - **u_norm, v_norm**: Normalized image coordinates (0-1000).
+    - **u_top_norm, v_top_norm**: Normalized image coordinates of the object's top center (0-1000).
     - **radius_u_norm, radius_v_norm**: Normalized radius on the image.
 
     If `detect_objects` is true, `detections` includes `ground_center` containing these values for the object's base center.
@@ -328,19 +330,16 @@ TOOL_DOCS = {
     JSON形式の文字列で返されます。
 
     【AIへの指示】
-    ロボットアームで物体を操作する計画（ピック＆プレイスなど）を立てる際には、
-    対象物の正確な「高さ(height)」や、衝突を避けるための「アプローチ安全オフセット(approach_z_offset)」を
-    把握するため、**必ず最初にこのツールを実行してください。**
+    ロボットアームで物体を操作する計画（ピック＆プレイスなど）を立てる際には、対象物の正確な「把持高さ(gripping_height)」を把握するため、**必ず最初にこのツールを実行してください。**
 
     【データ構造の詳細】
     - name: ワークの名称（日本語）
-    - height: ワーク自体の物理的な高さ (mm)。アームを下降させる際の基準点となります。
-    - approach_z_offset: ワークの上方でアームを水平移動させる際の、安全マージン (mm)。
+    - gripping_height: ワークを把持する際のZ座標 (mm)。アームを下降させる際の目標高さとなります。
     - description: ワークに関する補足情報。
 
     【重要：安全な経路計画のための計算式】
     ワークを持った状態で水平移動を行う際は、必ず以下の式で算出される「安全高度」までアームを上昇させてください。
-    安全高度 (Z座標) = ワークの height + approach_z_offset
+    安全高度 (Z座標) = gripping_height + 50.0 (安全マージン)
     """,
         'execute_sequence': """
     ロボットアームに一連の動作（コマンドシーケンス）をセミコロン ';' 区切りで送信します。
@@ -357,7 +356,7 @@ TOOL_DOCS = {
 
     【AI管制官への絶対遵守ルール：経路計画】
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
-    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください (安全高度 = height + approach_z_offset)。
+    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください (安全高度 = gripping_height + 50.0)。
     - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。低い高度のまま直線的に移動すると、他の物体と衝突する危険があります。
     """,
         'execute_sequence_marker_coords': """
@@ -381,8 +380,10 @@ TOOL_DOCS = {
     - **x, y, z**: ArUcoマーカー座標系（マーカー原点）での3次元座標 (mm)。
     - **xw, yw, zw**: ロボットベース座標系（ロボット原点）での3次元座標 (mm)。`execute_sequence` での移動指令にはこの値を使用します。
     - **r**: 物体の推定半径 (mm)。
+    - **h**: 物体の推定高さ (mm)。
     - **u, v**: 画像上のピクセル座標 (px)。
     - **u_norm, v_norm**: 画像サイズを0-1000に正規化した座標。
+    - **u_top_norm, v_top_norm**: 物体上端中心の正規化画像座標 (0-1000)。
     - **radius_u_norm, radius_v_norm**: 正規化された画像上の半径（幅・高さ）。
 
     `detect_objects=True` の場合、検出された物体情報の `ground_center` に上記座標が含まれます。

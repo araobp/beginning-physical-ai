@@ -1,0 +1,9 @@
+class_label,name_ja,name_en,gripping_height,Target,description_ja,description_en
+earplug_case,耳栓ケース,Earplug Case,20.0,yes,円筒形のケース。,Cylindrical case.
+eraser,消しゴム,Eraser,0,no,小さな消しゴム。,Small eraser.
+melamine_sponge,メラミンスポンジ,Melamine Sponge,10.0,yes,キューブ状のメラミンスポンジ。日本では商品名「激落ちくん」として販売されている。,Cube-shaped melamine sponge. Sold in Japan under the product name "Gekiochi-kun".
+battery,乾電池,Battery,0,no,単３か単４の乾電池,AA or AAA battery.
+pencil_cap,えんぴつキャップ,Pencil Cap,20.0,yes,色々な色のえんぴつキャップ。,Various colored pencil caps.
+beer_crate,ビールケース,Beer Crate,0,no,ビールケースのミニチュア。,Miniature beer crate.
+basket,かご,Basket,0,no,かごのミニチュア。ピックされた物体のプレイス先で、かごの中央へ物体をリリース。,Miniature basket. Used as a placement target for picked objects, releasing them into the center of the basket.
+gripper,グリッパー,Gripper,0,no,ロボットアームのグリッパー。,Robot arm gripper.

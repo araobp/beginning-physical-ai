@@ -1062,6 +1062,14 @@
                 </div>
                 {@const groundContactX = obj.ground_center ? obj.ground_center.u_norm / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
                 {@const groundContactY = obj.ground_center ? obj.ground_center.v_norm / 10 : obj.box_2d[2] / 10}
+                {#if obj.ground_center && obj.ground_center.u_top_norm !== undefined}
+                    {@const topX = obj.ground_center.u_top_norm / 10}
+                    {@const topY = obj.ground_center.v_top_norm / 10}
+                    <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
+                      <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
+                    </svg>
+                    <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 6;"></div>
+                {/if}
                 {#if obj.ground_center && obj.ground_center.radius_u_norm}
                     <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0.7;"></div>
                 {/if}
@@ -1148,6 +1156,14 @@
                   </div>
                   {@const groundContactX = obj.ground_center ? obj.ground_center.u_norm / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
                   {@const groundContactY = obj.ground_center ? obj.ground_center.v_norm / 10 : obj.box_2d[2] / 10}
+                  {#if obj.ground_center && obj.ground_center.u_top_norm !== undefined}
+                      {@const topX = obj.ground_center.u_top_norm / 10}
+                      {@const topY = obj.ground_center.v_top_norm / 10}
+                      <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
+                        <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
+                      </svg>
+                      <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 6;"></div>
+                  {/if}
                   {#if obj.ground_center && obj.ground_center.radius_u_norm}
                       <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; opacity: 0.7;"></div>
                   {/if}
