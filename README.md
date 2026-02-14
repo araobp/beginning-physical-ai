@@ -4,7 +4,14 @@
 
 <img src="docs/4DoF_Robot_Kit.jpg" width="500px">
 
+## 国の政策
+
+- [官民で「国産AI開発」を本格化、5年で1兆円支援へ　ソフトバンクなどと新会社設立構想](https://www.sbbit.jp/article/cont1/177512)
+- [人工知能基本計画　～「信頼できるＡＩ」による「日本再起」～](https://www8.cao.go.jp/cstp/ai/ai_plan/aiplan_20251223)
+
 ## 経緯と目的
+
+フィジカルAIって何？つくりながら勉強してみる。勉強がうまくいったら、最安価フィジカルAI学習キット化を目指す。
 
 - 10年前のIoTブーム開始から6年間、IoT/AI/AR/3Dデジタルツインのプロトタイプつくっては現場で実験してきた経験あり、それが、フィジカルAI学習の土台になる。
 - 「フィジカルAI勉強したいけどロボット高価で手が出せない」＝＞「[自作シミュレーター上でロボット動かしVLAも評価](https://github.com/araobp/unity-robotics)、しかし、フィジカルな部分を十分に勉強出来なかった」
@@ -20,6 +27,7 @@
 5. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その４：ロボットの目編](https://qiita.com/araobp/items/510b497c3415f7f42f76)
 6. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その５：MCPクライアント編](https://qiita.com/araobp/items/f70e27586f46bbd7ba45)
 7. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その６：VLA検証準備編](https://qiita.com/araobp/items/f4a5af993a2fe730f373)
+8. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その７：VLAもどき制作編](https://qiita.com/araobp/items/c47de8e8f11721750e69)
 
 ## YouTube投稿
 1. [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://youtu.be/fcqtPaY-7mA)
