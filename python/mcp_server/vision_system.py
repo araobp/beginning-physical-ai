@@ -335,7 +335,7 @@ class VisionSystem:
             D_poly = abs(aabb_h * C - aabb_w * S) / denom
         else:
             D_poly = min(aabb_w, aabb_h)
-        
+
         # クランプ: 直径はAABBの短辺より大きくなることはない
         D_poly = min(D_poly, aabb_w, aabb_h)
         

@@ -1057,33 +1057,37 @@
               <img src={cameraImage} alt="Robot Camera View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handleImageClick} />
               {#each detectedObjects as obj, i}
                 {@const color = getColorForLabel(obj.label)}
+                {#if obj.ground_center}
+                    {@const groundContactX = obj.ground_center.u_norm / 10}
+                    {@const groundContactY = obj.ground_center.v_norm / 10}
+                    {#if obj.label.endsWith('_ok') && obj.ground_center.radius_u_norm}
+                        <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0.7; z-index: 5;"></div>
+                    {/if}
+                    {#if obj.ground_center.u_top_norm !== undefined}
+                        {@const topX = obj.ground_center.u_top_norm / 10}
+                        {@const topY = obj.ground_center.v_top_norm / 10}
+                        <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;">
+                          <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
+                        </svg>
+                        <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
+                    {/if}
+                    <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
+                {/if}
                 <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
                   <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
                 </div>
-                {@const groundContactX = obj.ground_center ? obj.ground_center.u_norm / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
-                {@const groundContactY = obj.ground_center ? obj.ground_center.v_norm / 10 : obj.box_2d[2] / 10}
-                {#if obj.ground_center && obj.ground_center.u_top_norm !== undefined}
-                    {@const topX = obj.ground_center.u_top_norm / 10}
-                    {@const topY = obj.ground_center.v_top_norm / 10}
-                    <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
-                      <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
-                    </svg>
-                    <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 6;"></div>
+                {#if obj.ground_center}
+                    <div style="position: absolute; left: {obj.ground_center.u_norm / 10}%; top: {obj.ground_center.v_norm / 10}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 5;">
+                        {#if obj.imageCoords}
+                            <div style="background: rgba(0,0,0,0.7); color: white; padding: 2px 5px; border-radius: 3px; font-size: 0.7em; font-family: monospace; white-space: nowrap;">
+                                <div>u: {obj.imageCoords.u}, v: {obj.imageCoords.v} (px)</div>
+                                {#if obj.worldCoords}
+                                    <div>x: {obj.worldCoords.x.toFixed(1)}, y: {obj.worldCoords.y.toFixed(1)} (mm)</div>
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
                 {/if}
-                {#if obj.ground_center && obj.ground_center.radius_u_norm}
-                    <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0.7;"></div>
-                {/if}
-                <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;"></div>
-                <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 10;">
-                    {#if obj.imageCoords}
-                        <div style="background: rgba(0,0,0,0.7); color: white; padding: 2px 5px; border-radius: 3px; font-size: 0.7em; font-family: monospace; white-space: nowrap;">
-                            <div>u: {obj.imageCoords.u}, v: {obj.imageCoords.v} (px)</div>
-                            {#if obj.worldCoords}
-                                <div>x: {obj.worldCoords.x.toFixed(1)}, y: {obj.worldCoords.y.toFixed(1)} (mm)</div>
-                            {/if}
-                        </div>
-                    {/if}
-                </div>
               {/each}
               {#if targetMarker}
                 <div style="position: absolute; left: {targetMarker.x}px; top: {targetMarker.y}px; width: 0; height: 0; pointer-events: none;">
@@ -1151,23 +1155,25 @@
               {#if ppShowDetections}
                 {#each ppDetections as obj}
                   {@const color = getColorForLabel(obj.label)}
+                  {#if obj.ground_center}
+                      {@const groundContactX = obj.ground_center.u_norm / 10}
+                      {@const groundContactY = obj.ground_center.v_norm / 10}
+                      {#if obj.label.endsWith('_ok') && obj.ground_center.radius_u_norm}
+                          <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; opacity: 0.7;"></div>
+                      {/if}
+                      {#if obj.ground_center.u_top_norm !== undefined}
+                          {@const topX = obj.ground_center.u_top_norm / 10}
+                          {@const topY = obj.ground_center.v_top_norm / 10}
+                          <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;">
+                            <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
+                          </svg>
+                          <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
+                      {/if}
+                      <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
+                  {/if}
                   <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
                     <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
                   </div>
-                  {@const groundContactX = obj.ground_center ? obj.ground_center.u_norm / 10 : (obj.box_2d[1] + obj.box_2d[3]) / 20}
-                  {@const groundContactY = obj.ground_center ? obj.ground_center.v_norm / 10 : obj.box_2d[2] / 10}
-                  {#if obj.ground_center && obj.ground_center.u_top_norm !== undefined}
-                      {@const topX = obj.ground_center.u_top_norm / 10}
-                      {@const topY = obj.ground_center.v_top_norm / 10}
-                      <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
-                        <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
-                      </svg>
-                      <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 6;"></div>
-                  {/if}
-                  {#if obj.ground_center && obj.ground_center.radius_u_norm}
-                      <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj.ground_center.radius_u_norm / 10) * 2}%; height: {(obj.ground_center.radius_v_norm / 10) * 2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; opacity: 0.7;"></div>
-                  {/if}
-                  <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 6;"></div>
                 {/each}
               {/if}
 
