@@ -62,13 +62,13 @@ class CalibrationGUI:
             y_mm = float(entry_y.get()) * 10.0
             z_mm = float(entry_z.get()) * 10.0
             
-            # Apply offsets (mm) to get world coordinates (xw, yw, zw)
-            xw_mm = x_mm + self.offset_x
-            yw_mm = y_mm + self.offset_y
-            zw_mm = z_mm # Assuming no Z offset
+            # Apply offsets (mm) to get world coordinates (x, y, z)
+            x_w_mm = x_mm + self.offset_x
+            y_w_mm = y_mm + self.offset_y
+            z_w_mm = z_mm # Assuming no Z offset
             
             # Already in mm for the robot controller
-            return xw_mm, yw_mm, zw_mm
+            return x_w_mm, y_w_mm, z_w_mm
         except ValueError:
             messagebox.showerror("Error", "Invalid numeric input")
             return None
@@ -76,8 +76,8 @@ class CalibrationGUI:
     def _send_calib(self, cmd_name, entry_x, entry_y, entry_z):
         coords = self._get_coords_mm(entry_x, entry_y, entry_z)
         if coords:
-            xw, yw, zw = coords
-            cmd = f"{cmd_name} x={xw:.2f} y={yw:.2f} z={zw:.2f}"
+            x, y, z = coords
+            cmd = f"{cmd_name} x={x:.2f} y={y:.2f} z={z:.2f}"
             print(f"Sending: {cmd}")
             resp = self.send_command(cmd)
             messagebox.showinfo("Response", f"Sent: {cmd}\nResponse: {resp}")

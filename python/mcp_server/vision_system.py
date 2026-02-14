@@ -3,6 +3,7 @@ import numpy as np
 import base64
 import time
 import threading
+from collections import Counter
 
 class VisionSystem:
     """
@@ -57,13 +58,13 @@ class VisionSystem:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap_lock = threading.Lock()
+        self.state_lock = threading.Lock()
 
         # 姿勢データ (update_pose()で更新)
         self.rvec = None
         self.tvec = None
         self.R = None
         self.camera_pos = None
-        self.visualize_axes = False
         self.last_pose_update_time = 0
         self.pose_cache_duration = 0.1  # 秒
         self.last_processed_frame = None
@@ -92,16 +93,15 @@ class VisionSystem:
             [0, size_mm, 0]         # 3: 左下
         ], dtype=np.float32)
 
-    def update_pose(self, force_update=False, visualize_axes=False):
+    def update_pose(self, force_update=False):
         """
         ArUcoマーカーを検出し、カメラの姿勢(rvec, tvec, R, camera_pos)を更新する。
         姿勢が正常に更新された場合はTrue、それ以外はFalseを返す。
         計算負荷を減らすため、短期間は姿勢をキャッシュする。
         """
-        self.visualize_axes = visualize_axes
-
-        if not force_update and time.time() - self.last_pose_update_time < self.pose_cache_duration:
-            return self.rvec is not None
+        with self.state_lock:
+            if not force_update and time.time() - self.last_pose_update_time < self.pose_cache_duration:
+                return self.rvec is not None
 
         with self.cap_lock:
             ret, frame = self.cap.read()
@@ -110,8 +110,6 @@ class VisionSystem:
             return False
 
         undistorted_frame = cv2.undistort(frame, self.mtx, self.dist, None, self.mtx)
-        self.last_processed_frame = undistorted_frame
-        self.last_frame_capture_time = time.time()
         gray = cv2.cvtColor(undistorted_frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = self.detector.detectMarkers(gray)
 
@@ -121,15 +119,20 @@ class VisionSystem:
             ret_pnp, rvec, tvec = cv2.solvePnP(self.obj_points, corners[idx], self.mtx, np.zeros((5, 1)))
 
             if ret_pnp:
-                self.rvec, self.tvec = rvec, tvec
-                self.R, _ = cv2.Rodrigues(rvec)
-                self.camera_pos = -np.dot(self.R.T, tvec.flatten())
-                self.last_pose_update_time = time.time()
-                return True
+                with self.state_lock:
+                    self.last_processed_frame = undistorted_frame
+                    self.last_frame_capture_time = time.time()
+                    self.rvec, self.tvec = rvec, tvec
+                    self.R, _ = cv2.Rodrigues(rvec)
+                    self.camera_pos = -np.dot(self.R.T, tvec.flatten())
+                    self.last_pose_update_time = time.time()
+                    return True
 
-        # マーカーが見つからない場合は姿勢を無効化
-        self.rvec, self.tvec, self.R, self.camera_pos = None, None, None, None
-        return False
+        with self.state_lock:
+            self.last_processed_frame = undistorted_frame
+            self.last_frame_capture_time = time.time()
+            self.rvec, self.tvec, self.R, self.camera_pos = None, None, None, None
+            return False
 
     def _draw_trajectory(self, frame):
         """Pick & Placeの軌道を描画する"""
@@ -140,10 +143,10 @@ class VisionSystem:
              z_safe = self.safety_z
              
              points_3d = np.array([
-                 [self.pick_point['x'], self.pick_point['y'], z_pick],      # 0: Pick Low
-                 [self.pick_point['x'], self.pick_point['y'], z_safe],      # 1: Pick Safe
-                 [self.place_point['x'], self.place_point['y'], z_safe],    # 2: Place Safe
-                 [self.place_point['x'], self.place_point['y'], z_place]    # 3: Place Low
+                 [self.pick_point['xm'], self.pick_point['ym'], z_pick],      # 0: Pick Low
+                 [self.pick_point['xm'], self.pick_point['ym'], z_safe],      # 1: Pick Safe
+                 [self.place_point['xm'], self.place_point['ym'], z_safe],    # 2: Place Safe
+                 [self.place_point['xm'], self.place_point['ym'], z_place]    # 3: Place Low
              ], dtype=np.float32)
              
              # 3D座標を2D画像座標に投影
@@ -159,29 +162,36 @@ class VisionSystem:
              cv2.circle(frame, tuple(pts[0]), 5, (255, 0, 255), -1) # Pick
              cv2.circle(frame, tuple(pts[3]), 5, (255, 0, 0), -1)   # Place
 
-    def get_undistorted_image_base64(self, display=False):
+    def get_undistorted_image_base64(self, display=False, draw_axes=False):
         """
         フレームをキャプチャして歪み補正を行い、Base64エンコードされたJPEG文字列として返す。
         """
         # 直近に処理されたフレームがあればそれを使用する（描画と検出の同期のため）
-        if self.last_processed_frame is not None and (time.time() - self.last_frame_capture_time < 0.5):
-            undistorted_frame = self.last_processed_frame.copy()
-        else:
-            with self.cap_lock:
-                ret, frame = self.cap.read()
-            if not ret: return None
-            undistorted_frame = cv2.undistort(frame, self.mtx, self.dist, None, self.mtx)
+        undistorted_frame = None
+        current_rvec, current_tvec = None, None
+
+        with self.state_lock:
+            if self.last_processed_frame is not None and (time.time() - self.last_frame_capture_time < 0.5):
+                undistorted_frame = self.last_processed_frame.copy()
+                current_rvec = self.rvec.copy() if self.rvec is not None else None
+                current_tvec = self.tvec.copy() if self.tvec is not None else None
+        
+        if undistorted_frame is None:
+             with self.cap_lock:
+                 ret, frame = self.cap.read()
+             if not ret: return None
+             undistorted_frame = cv2.undistort(frame, self.mtx, self.dist, None, self.mtx)
         
         # 姿勢が既知であれば座標軸を描画
-        if self.rvec is not None and self.tvec is not None and self.visualize_axes:
+        if current_rvec is not None and current_tvec is not None and draw_axes:
             length = self.marker_size_mm * 0.8
-            cv2.drawFrameAxes(undistorted_frame, self.mtx, np.zeros((5, 1)), self.rvec, self.tvec, length)
+            cv2.drawFrameAxes(undistorted_frame, self.mtx, np.zeros((5, 1)), current_rvec, current_tvec, length)
 
             # 3D軸のラベル位置座標を定義 (軸より少し外側)
             label_len = length * 1.1
             axis_points_3d = np.float32([[label_len, 0, 0], [0, label_len, 0], [0, 0, label_len]]).reshape(-1, 3)
             # 3D座標を2D画像座標に投影
-            axis_points_2d, _ = cv2.projectPoints(axis_points_3d, self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+            axis_points_2d, _ = cv2.projectPoints(axis_points_3d, current_rvec, current_tvec, self.mtx, np.zeros((5, 1)))
             # 各軸のラベルを描画
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(undistorted_frame, 'X', tuple(axis_points_2d[0].ravel().astype(int)), font, 0.7, (0, 0, 255), 2)
@@ -203,26 +213,29 @@ class VisionSystem:
         _, buffer = cv2.imencode('.jpg', undistorted_frame)
         return base64.b64encode(buffer).decode('utf-8')
 
-    def get_jpeg_bytes(self):
+    def get_jpeg_bytes(self, draw_axes=True):
         """MJPEG配信用のJPEGバイト列を取得"""
         # 最新フレームで姿勢更新を行う
-        self.update_pose(force_update=True, visualize_axes=True)
+        self.update_pose(force_update=True)
         
-        if self.last_processed_frame is None:
-            return None
+        with self.state_lock:
+            if self.last_processed_frame is None:
+                return None
+            frame = self.last_processed_frame.copy()
+            current_rvec = self.rvec.copy() if self.rvec is not None else None
+            current_tvec = self.tvec.copy() if self.tvec is not None else None
             
-        frame = self.last_processed_frame.copy()
         
         # 軸の描画
-        if self.rvec is not None and self.tvec is not None and self.visualize_axes:
+        if current_rvec is not None and current_tvec is not None and draw_axes:
              length = self.marker_size_mm * 0.8
-             cv2.drawFrameAxes(frame, self.mtx, np.zeros((5, 1)), self.rvec, self.tvec, length)
+             cv2.drawFrameAxes(frame, self.mtx, np.zeros((5, 1)), current_rvec, current_tvec, length)
 
              # 3D軸のラベル位置座標を定義 (軸より少し外側)
              label_len = length * 1.1
              axis_points_3d = np.float32([[label_len, 0, 0], [0, label_len, 0], [0, 0, label_len]]).reshape(-1, 3)
              # 3D座標を2D画像座標に投影
-             axis_points_2d, _ = cv2.projectPoints(axis_points_3d, self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+             axis_points_2d, _ = cv2.projectPoints(axis_points_3d, current_rvec, current_tvec, self.mtx, np.zeros((5, 1)))
              # 各軸のラベルを描画
              font = cv2.FONT_HERSHEY_SIMPLEX
              cv2.putText(frame, 'X', tuple(axis_points_2d[0].ravel().astype(int)), font, 0.7, (0, 0, 255), 2)
@@ -235,7 +248,7 @@ class VisionSystem:
         _, buffer = cv2.imencode('.jpg', frame)
         return buffer.tobytes()
 
-    def _estimate_cylinder_3d(self, box_norm):
+    def _estimate_cylinder_3d(self, box_norm, rvec, tvec, R, camera_pos):
         """
         広角カメラによる円柱の接地中心推定（5ステップ）
 
@@ -248,7 +261,7 @@ class VisionSystem:
             ArUcoマーカーの右下を原点とする「マーカー座標系」です。
             単位はミリメートル(mm)です。
         """
-        if self.rvec is None or self.tvec is None:
+        if rvec is None or tvec is None:
             return None
 
         # 画像サイズ
@@ -271,7 +284,7 @@ class VisionSystem:
         p_center_cam = np.array([(u_c - cx) / fx, (v_c - cy) / fy, 1.0])
         
         # World Z軸 (0,0,1) のカメラ座標系ベクトル (Rの第3列)
-        axis_z_cam = self.R[:, 2]
+        axis_z_cam = R[:, 2]
         
         # 視線上の点から、World Z方向に少し移動した点を画像に投影し、方向を得る
         # p_up_cam = p_center_cam + axis_z_cam * alpha
@@ -350,13 +363,13 @@ class VisionSystem:
         
         # --- 4. 接地位置 (X, Y, 0) の推定 ---
         # 画像上の接地点 u_contact, v_contact からレイを飛ばす
-        coords, _ = self.convert_2d_to_3d(u_contact, v_contact, rvec=self.rvec, tvec=self.tvec)
+        coords, _ = self.convert_2d_to_3d(u_contact, v_contact, rvec=rvec, tvec=tvec)
         if not coords: return None
-        P_ground_edge = np.array([coords['x'], coords['y'], 0.0])
+        P_ground_edge = np.array([coords['xm'], coords['ym'], 0.0])
         
         # カメラ位置
-        C_pos = self.camera_pos
-        dist_cam_obj = np.linalg.norm(P_ground_edge - C_pos)
+        C_pos = camera_pos
+        dist_cam_obj = np.linalg.norm(P_ground_edge - camera_pos)
         
         # 半径推定 (簡易版)
         # 視野角補正 (画面端での伸び)
@@ -379,7 +392,7 @@ class VisionSystem:
         # --- 5. 高さ推定 ---
         # Top点に対応する視線ベクトル
         ray_top_cam = np.array([(u_top - cx) / fx, (v_top - cy) / fy, 1.0])
-        ray_top_world = np.dot(self.R.T, ray_top_cam)
+        ray_top_world = np.dot(R.T, ray_top_cam)
         ray_top_world /= np.linalg.norm(ray_top_world)
         
         # 円筒軸の始点 B = P_center, 方向 V = (0,0,1)
@@ -389,7 +402,7 @@ class VisionSystem:
         
         B = P_center
         V = np.array([0.0, 0.0, 1.0])
-        A = C_pos
+        A = camera_pos
         U = ray_top_world
         
         AB = A - B
@@ -418,12 +431,12 @@ class VisionSystem:
 
         # --- 6. 出力値の計算 ---
         # 3D中心座標を2D画像座標(u, v)に再投影
-        imgpts, _ = cv2.projectPoints(np.array([P_center], dtype=np.float32), self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+        imgpts, _ = cv2.projectPoints(np.array([P_center], dtype=np.float32), rvec, tvec, self.mtx, np.zeros((5, 1)))
         u_center_reproj, v_center_reproj = imgpts[0][0]
 
         # 高さ位置の再投影
         P_top = P_center + np.array([0.0, 0.0, max(0.0, h_est)])
-        imgpts_top, _ = cv2.projectPoints(np.array([P_top], dtype=np.float32), self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+        imgpts_top, _ = cv2.projectPoints(np.array([P_top], dtype=np.float32), rvec, tvec, self.mtx, np.zeros((5, 1)))
         u_top_reproj, v_top_reproj = imgpts_top[0][0]
 
         # 0-1000正規化座標
@@ -434,20 +447,20 @@ class VisionSystem:
 
         # 半径のピクセル換算
         # 推定された実半径 r_est (mm) を、距離に基づいて画像上のピクセルサイズに逆投影します
-        dist_cam_center = np.linalg.norm(P_center - C_pos)
+        dist_cam_center = np.linalg.norm(P_center - camera_pos)
         radius_px = (r_est * fx) / dist_cam_center if dist_cam_center > 0 else 0
 
         # 視線角度による楕円化 (見かけの縦半径を圧縮)
-        view_cos = abs(self.R[2, 2]) if self.R is not None else 0.5
+        view_cos = abs(R[2, 2]) if R is not None else 0.5
         
         # 0-1000正規化半径
         radius_u_norm = (radius_px / w_img) * 1000
         radius_v_norm = (radius_px * view_cos / h_img) * 1000
 
         return {
-            "x": float(P_center[0]),
-            "y": float(P_center[1]),
-            "z": 0.0,
+            "xm": float(P_center[0]),
+            "ym": float(P_center[1]),
+            "zm": 0.0,
             "r": float(r_est),
             "h": float(max(0.0, h_est)),
             "u_norm": u_norm,
@@ -457,6 +470,59 @@ class VisionSystem:
             "radius_u_norm": float(radius_u_norm),
             "radius_v_norm": float(radius_v_norm)
         }
+
+    def _get_dominant_color(self, img_roi):
+        """
+        ROIの代表色をHSVで算出する。
+        K-means法(k=1)を使用して主要な色を抽出する。
+        """
+        if img_roi.size == 0:
+            return None
+            
+        # 計算量削減のためリサイズ (最大50x50程度)
+        h, w = img_roi.shape[:2]
+        if h > 50 or w > 50:
+            scale = min(50.0/h, 50.0/w)
+            # cv2.resize expects (width, height)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            if new_w > 0 and new_h > 0:
+                img_roi = cv2.resize(img_roi, (new_w, new_h))
+            
+        # データをフラット化
+        pixels = img_roi.reshape(-1, 3).astype(np.float32)
+        
+        # K-means (k=1)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        _, _, centers = cv2.kmeans(pixels, 1, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        
+        dominant_bgr = centers[0].astype(np.uint8)
+        
+        # BGR -> HSV変換
+        dominant_hsv_img = cv2.cvtColor(np.array([[dominant_bgr]]), cv2.COLOR_BGR2HSV)
+        h_val, s_val, v_val = dominant_hsv_img[0][0]
+        
+        return {"h": int(h_val), "s": int(s_val), "v": int(v_val)}
+
+    def _hsv_to_color_name(self, h, s, v):
+        """HSV値から簡易的な色名を判定する"""
+        # 彩度(S)の閾値を上げて、グレー/白/黒の判定を優先する (緑被り対策)
+        if s < 90: 
+            if v < 60: return "black"
+            if v > 150: return "white"
+            return "gray"
+        
+        if v < 60: return "black" # 低明度
+
+        # 色相による判定 (OpenCV H: 0-179)
+        if h < 8 or h >= 175: return "red"
+        if h < 22: return "orange"
+        if h < 45: return "yellow" # 黄色の範囲を広げる
+        if h < 95: return "green"
+        if h < 130: return "blue"
+        if h < 145: return "purple"
+        if h < 170: return "pink"
+        return "unknown"
 
     def detect_objects(self, model, confidence=0.7):
         """
@@ -469,10 +535,18 @@ class VisionSystem:
         Returns:
             list: 検出結果のリスト [{"label": str, "confidence": float, "box_2d": [...]}, ...]
         """
-        if self.last_processed_frame is None:
-            return []
+        frame = None
+        current_rvec, current_tvec, current_R, current_camera_pos = None, None, None, None
 
-        frame = self.last_processed_frame
+        with self.state_lock:
+            if self.last_processed_frame is None:
+                return []
+            frame = self.last_processed_frame.copy()
+            current_rvec = self.rvec.copy() if self.rvec is not None else None
+            current_tvec = self.tvec.copy() if self.tvec is not None else None
+            current_R = self.R.copy() if self.R is not None else None
+            current_camera_pos = self.camera_pos.copy() if self.camera_pos is not None else None
+
         h, w = frame.shape[:2]
 
         # 推論実行
@@ -498,23 +572,79 @@ class VisionSystem:
             det = {"label": label, "confidence": conf, "box_2d": norm_box}
             
             # 円柱としての3D位置推定
-            cyl_3d = self._estimate_cylinder_3d(norm_box)
+            cyl_3d = self._estimate_cylinder_3d(norm_box, current_rvec, current_tvec, current_R, current_camera_pos)
             if cyl_3d:
                 det["ground_center"] = cyl_3d
             
+            # 色判定 (円筒モデルがある場合はZ軸に沿ってサンプリングして多数決)
+            box_w = x2 - x1
+            box_h = y2 - y1
+            
+            color_samples = []
+            
+            if cyl_3d:
+                u_base = cyl_3d['u_norm'] * w / 1000
+                v_base = cyl_3d['v_norm'] * h / 1000
+                u_top = cyl_3d['u_top_norm'] * w / 1000
+                v_top = cyl_3d['v_top_norm'] * h / 1000
+                radius_px = cyl_3d['radius_u_norm'] * w / 1000
+                
+                num_samples = 5
+                roi_r = max(1, int(radius_px * 0.4))
+                
+                for i in range(num_samples):
+                    # 上下端は避けて 0.2~0.8 の範囲をサンプリング
+                    t = 0.2 + (0.6 * i / (num_samples - 1)) if num_samples > 1 else 0.5
+                    cx = int(u_base + (u_top - u_base) * t)
+                    cy = int(v_base + (v_top - v_base) * t)
+                    
+                    x1_c, y1_c = max(0, cx - roi_r), max(0, cy - roi_r)
+                    x2_c, y2_c = min(w, cx + roi_r), min(h, cy + roi_r)
+                    
+                    if x2_c > x1_c and y2_c > y1_c:
+                        roi = frame[y1_c:y2_c, x1_c:x2_c]
+                        color = self._get_dominant_color(roi)
+                        if color:
+                            c_name = self._hsv_to_color_name(color['h'], color['s'], color['v'])
+                            color_samples.append({'hsv': color, 'name': c_name})
+
+            if not color_samples:
+                # フォールバック: バウンディングボックスの中心50%
+                margin_w, margin_h = box_w * 0.25, box_h * 0.25
+                x1_c, y1_c = max(0, int(x1 + margin_w)), max(0, int(y1 + margin_h))
+                x2_c, y2_c = min(w, int(x2 - margin_w)), min(h, int(y2 - margin_h))
+                
+                if x2_c > x1_c and y2_c > y1_c:
+                    roi = frame[y1_c:y2_c, x1_c:x2_c]
+                    color = self._get_dominant_color(roi)
+                    if color:
+                        c_name = self._hsv_to_color_name(color['h'], color['s'], color['v'])
+                        color_samples.append({'hsv': color, 'name': c_name})
+
+            if color_samples:
+                names = [s['name'] for s in color_samples]
+                winner_name = Counter(names).most_common(1)[0][0]
+                winner_hsvs = [s['hsv'] for s in color_samples if s['name'] == winner_name]
+                avg_h = int(np.mean([c['h'] for c in winner_hsvs]))
+                avg_s = int(np.mean([c['s'] for c in winner_hsvs]))
+                avg_v = int(np.mean([c['v'] for c in winner_hsvs]))
+                
+                det["color_hsv"] = {"h": avg_h, "s": avg_s, "v": avg_v}
+                det["color_name"] = winner_name
+
             detections.append(det)
             
         return detections
 
-    def convert_world_coords_to_image(self, x: float, y: float, z: float):
+    def convert_marker_coords_to_image(self, xm: float, ym: float, zm: float):
         """
-        3D世界座標(x, y, z) [mm] を 2D画像座標(u, v) [px] に変換する。
+        3Dマーカー座標(xm, ym, zm) [mm] を 2D画像座標(u, v) [px] に変換する。
         """
         if self.rvec is None or self.tvec is None:
             return None
 
         try:
-            object_point = np.array([[x, y, z]], dtype=np.float32)
+            object_point = np.array([[xm, ym, zm]], dtype=np.float32)
             image_points, _ = cv2.projectPoints(
                 object_point,
                 self.rvec,
@@ -530,7 +660,7 @@ class VisionSystem:
 
     def convert_2d_to_3d(self, u, v, draw_target=False, rvec=None, tvec=None):
         """
-        歪み補正済み画像の2Dピクセル座標(u, v)を、3D世界座標(x, y, z=0) [mm] に変換する。
+        歪み補正済み画像の2Dピクセル座標(u, v)を、3Dマーカー座標(xm, ym, zm=0) [mm] に変換する。
         カメラの姿勢が既知である必要がある。
         戻り値: (座標辞書, 描画済みフレーム) または (None, None)
         """
@@ -541,10 +671,13 @@ class VisionSystem:
             camera_pos = -np.dot(R.T, tvec.flatten())
         else:
             # 現在のシステム姿勢を使用
-            if not self.update_pose(force_update=False) and (self.R is None or self.camera_pos is None):
-                return None, None
-            current_rvec, current_tvec = self.rvec, self.tvec
-            R, camera_pos = self.R, self.camera_pos
+            # Note: This uses the cached state without lock, might be slightly inconsistent if update_pose is running
+            # But convert_2d_to_3d is usually called from interactive mode or tools where update_pose was just called.
+            with self.state_lock:
+                if self.rvec is None:
+                    return None, None
+                current_rvec, current_tvec = self.rvec, self.tvec
+                R, camera_pos = self.R, self.camera_pos
 
         fx, fy, cx, cy = self.mtx[0, 0], self.mtx[1, 1], self.mtx[0, 2], self.mtx[1, 2]
         ray_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
@@ -562,7 +695,7 @@ class VisionSystem:
         if abs(ray_world[2]) > 1e-6:
             s = -camera_pos[2] / ray_world[2]
             intersect_3d = camera_pos + s * ray_world
-            return {"x": intersect_3d[0], "y": intersect_3d[1], "z": 0.0}, annotated_frame
+            return {"xm": intersect_3d[0], "ym": intersect_3d[1], "zm": 0.0}, annotated_frame
         
         return None, annotated_frame
 
@@ -573,22 +706,22 @@ class VisionSystem:
             return
 
         # 世界座標の計算
-        pick_xw = self.pick_point['x'] + self.robot_offset_x
-        pick_yw = self.pick_point['y'] + self.robot_offset_y
-        place_xw = self.place_point['x'] + self.robot_offset_x
-        place_yw = self.place_point['y'] + self.robot_offset_y
+        pick_x = self.pick_point['xm'] + self.robot_offset_x
+        pick_y = self.pick_point['ym'] + self.robot_offset_y
+        place_x = self.place_point['xm'] + self.robot_offset_x
+        place_y = self.place_point['ym'] + self.robot_offset_y
 
         # コマンドシーケンスの構築
         # 安全高さ: 90mm, Pick高さ: 20mm, Place高さ: 30mm
         cmds = [
             "grip open",
             "move z=90 s=100",  # 安全高さへ移動
-            f"move x={pick_xw:.1f} y={pick_yw:.1f} z=90 s=100", # Pick位置上空
+            f"move x={pick_x:.1f} y={pick_y:.1f} z=90 s=100", # Pick位置上空
             "move z=20 s=50",   # Pick位置へ下降
             "grip close",
             "delay t=1000",
             "move z=90 s=100",  # 安全高さへ上昇
-            f"move x={place_xw:.1f} y={place_yw:.1f} z=90 s=100", # Place位置上空
+            f"move x={place_x:.1f} y={place_y:.1f} z=90 s=100", # Place位置上空
             "move z=30 s=50",   # Place位置へ下降（落下させるため少し高い位置）
             "grip open",
             "delay t=1000",
@@ -653,7 +786,7 @@ class VisionSystem:
             # 静止画モードの場合は、その時点の姿勢(static_rvec/tvec)を使用する
             coords, _ = self.convert_2d_to_3d(x, y, draw_target=False, rvec=self.static_rvec, tvec=self.static_tvec)
             if coords:
-                pt = {'u': x, 'v': y, 'x': coords['x'], 'y': coords['y']}
+                pt = {'u': x, 'v': y, 'xm': coords['xm'], 'ym': coords['ym']}
                 if self.pick_point is None:
                     self.pick_point = pt
                     print(f"Pick point set: {pt}")
@@ -687,7 +820,7 @@ class VisionSystem:
             while not self.should_exit:
                 # キャプチャ要求があれば更新
                 if self.need_capture:
-                    self.update_pose(force_update=True, visualize_axes=False)
+                    self.update_pose(force_update=True)
                     if self.last_processed_frame is not None:
                         display_frame = self.last_processed_frame.copy()
                         self.static_rvec = self.rvec.copy() if self.rvec is not None else None
@@ -729,20 +862,20 @@ class VisionSystem:
                         
                         # 座標テキスト作成
                         uv_text = f"u: {pt['u']}, v: {pt['v']} (px)"
-                        xy_text = f"x: {pt['x']:.1f}, y: {pt['y']:.1f} (mm)"
-                        xw = pt['x'] + self.robot_offset_x
-                        yw = pt['y'] + self.robot_offset_y
-                        xwyw_text = f"xw: {xw:.1f}, yw: {yw:.1f} (mm)"
+                        xmym_text = f"xm: {pt['xm']:.1f}, ym: {pt['ym']:.1f} (mm)"
+                        x = pt['xm'] + self.robot_offset_x
+                        y = pt['ym'] + self.robot_offset_y
+                        xy_text = f"x: {x:.1f}, y: {y:.1f} (mm)"
                         
                         # テキストサイズと枠の計算
                         uv_size, _ = cv2.getTextSize(uv_text, font, font_scale, thickness)
+                        xmym_size, _ = cv2.getTextSize(xmym_text, font, font_scale, thickness)
                         xy_size, _ = cv2.getTextSize(xy_text, font, font_scale, thickness)
-                        xwyw_size, _ = cv2.getTextSize(xwyw_text, font, font_scale, thickness)
                         
                         box_pad = 10
                         line_gap = 15
-                        box_w = max(uv_size[0], xy_size[0], xwyw_size[0]) + box_pad * 2
-                        box_h = uv_size[1] + xy_size[1] + xwyw_size[1] + line_gap * 2 + box_pad * 2
+                        box_w = max(uv_size[0], xmym_size[0], xy_size[0]) + box_pad * 2
+                        box_h = uv_size[1] + xmym_size[1] + xy_size[1] + line_gap * 2 + box_pad * 2
                         
                         box_x = label_x + label_size[0] + 15
                         box_y = pt['v'] - box_h // 2
@@ -756,8 +889,8 @@ class VisionSystem:
                         
                         # テキスト描画
                         cv2.putText(frame_to_show, uv_text, (box_x + box_pad, box_y + box_pad + uv_size[1]), font, font_scale, color, thickness)
-                        cv2.putText(frame_to_show, xy_text, (box_x + box_pad, box_y + box_pad + uv_size[1] + line_gap + xy_size[1]), font, font_scale, color, thickness)
-                        cv2.putText(frame_to_show, xwyw_text, (box_x + box_pad, box_y + box_pad + uv_size[1] + line_gap + xy_size[1] + line_gap + xwyw_size[1]), font, font_scale, color, thickness)
+                        cv2.putText(frame_to_show, xmym_text, (box_x + box_pad, box_y + box_pad + uv_size[1] + line_gap + xmym_size[1]), font, font_scale, color, thickness)
+                        cv2.putText(frame_to_show, xy_text, (box_x + box_pad, box_y + box_pad + uv_size[1] + line_gap + xmym_size[1] + line_gap + xy_size[1]), font, font_scale, color, thickness)
 
                 # ボタン配置設定
                 margin = 10

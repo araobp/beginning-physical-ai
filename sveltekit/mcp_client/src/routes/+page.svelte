@@ -26,12 +26,12 @@
   let detectedObjects = $state<any[]>([]);
   let visualizeAxes = $state(true);
   let detectionConfidence = $state(0.7);
-
+  
   // Pick & Place State
   let ppImage = $state<string | null>(null);
   let ppCapturing = $state(false);
-  let ppPickPoint = $state<{ u: number, v: number, x: number, y: number, xw: number, yw: number, u_norm: number, v_norm: number } | null>(null);
-  let ppPlacePoint = $state<{ u: number, v: number, x: number, y: number, xw: number, yw: number, u_norm: number, v_norm: number } | null>(null);
+  let ppPickPoint = $state<{ u: number, v: number, xm: number, ym: number, x: number, y: number, u_norm: number, v_norm: number } | null>(null);
+  let ppPlacePoint = $state<{ u: number, v: number, xm: number, ym: number, x: number, y: number, u_norm: number, v_norm: number } | null>(null);
   let ppExecuting = $state(false);
   let ppPickZ = $state(20);
   let ppPlaceZ = $state(30);
@@ -43,12 +43,21 @@
   let ppDetections = $state<any[]>([]);
   let ppDetectionPolling = $state(false);
   let ppShowTrajectory = $state(false);
+  let ppHoveredObject = $state<any>(null);
+  let lastPPMousePosition = $state<{x: number, y: number} | null>(null);
   let ppTrajectoryPoints = $state<{u: number, v: number}[]>([]);
   let ppImageDim = $state<{w: number, h: number} | null>(null);
   let joypadLeft = $state({ x: 0, y: 0 });
   let joypadRight = $state({ x: 0, y: 0 });
   let currentRobotPos = $state({ x: 0, y: 0, z: 0 });
   let lastJoypadState = $state<Record<string, any>>({});
+  
+  // Gemini Monitor State
+  let geminiLive = $state(false);
+  let geminiLogs = $state<any[]>([]);
+  let geminiDetections = $state<any[]>([]);
+  let geminiTrajectoryPoints = $state<{u: number, v: number}[]>([]);
+  let geminiImageDim = $state<{w: number, h: number} | null>(null);
 
   let ppDetectionTimeout: any = null;
   $effect(() => {
@@ -80,6 +89,7 @@
     ja: {
       title: "最も安い4軸ロボットアーム",
       tab_tools: "MCPツール",
+      tab_resources: "MCPリソース",
       tab_camera: "ロボットの目",
       tab_control: "ロボット操縦（手動・半自動）",
       tab_gemini: "ロボット操縦（Gemini）",
@@ -87,6 +97,10 @@
       loading_tools: "ツールを読み込み中...",
       error_tools: "ツールの読み込みエラー: ",
       capture: "撮影",
+      loading_resources: "リソースを読み込み中...",
+      error_resources: "リソースの読み込みエラー: ",
+      read_resource: "読み込み",
+      no_resources: "リソースが見つかりません",
       capturing: "撮影中...",
       detect: "検出",
       detecting: "検出中...",
@@ -109,6 +123,7 @@
       interval_ms: "更新間隔(ms)",
       confidence: "信頼度",
       show_trajectory: "軌道表示",
+      gemini_monitor_desc: "Gemini CLIによる操作をモニタリングします。",
     },
     en: {
       title: "The Cheapest 4-DoF Robot Arm",
@@ -142,6 +157,7 @@
       interval_ms: "Interval (ms)",
       confidence: "Confidence",
       show_trajectory: "Show Trajectory",
+      gemini_monitor_desc: "Monitor operations performed by Gemini CLI.",
     }
   };
 
@@ -157,12 +173,25 @@
     '#FF6D00', // Orange
   ];
 
-  function getColorForLabel(label: string) {
-    let hash = 0;
-    for (let i = 0; i < label.length; i++) {
-      hash = label.charCodeAt(i) + ((hash << 5) - hash);
+  const colorNameMap: Record<string, string> = {
+    'red': '#FF3838',
+    'orange': '#FF6D00',
+    'yellow': '#FFEA00',
+    'green': '#76FF03',
+    'blue': '#2979FF',
+    'purple': '#651FFF',
+    'pink': '#F50057',
+    'black': '#000000',
+    'white': '#FFFFFF',
+    'gray': '#9E9E9E',
+    'unknown': '#9E9E9E'
+  };
+
+  function getColorForObject(obj: any) {
+    if (obj.color_name && colorNameMap[obj.color_name]) {
+        return colorNameMap[obj.color_name];
     }
-    return boxColors[Math.abs(hash) % boxColors.length];
+    return '#9E9E9E';
   }
 
   function getTextColor(hexcolor: string) {
@@ -217,7 +246,7 @@
         body: JSON.stringify({
           type: 'call_tool',
           name: selectedTool.name,
-          arguments: toolArgs
+          arguments: { ...toolArgs, calling_client: 'web_client' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -268,7 +297,7 @@
         body: JSON.stringify({
           type: 'call_tool',
           name: 'get_live_image',
-          arguments: { visualize_axes: visualizeAxes }
+          arguments: { visualize_axes: visualizeAxes, return_image: true, calling_client: 'web_client' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -328,7 +357,9 @@
           arguments: { 
             visualize_axes: visualizeAxes,
             detect_objects: true,
-            confidence: Number(detectionConfidence)
+            confidence: Number(detectionConfidence),
+            return_image: true,
+            calling_client: 'web_client'
           }
         }),
         headers: { 'Content-Type': 'application/json' }
@@ -349,6 +380,7 @@
                     confidence: o.confidence,
                     box_2d: o.box_2d,
                     ground_center: o.ground_center,
+                    color_name: o.color_name,
                     imageCoords: null,
                     worldCoords: null,
                     isTransforming: false
@@ -386,7 +418,7 @@
         body: JSON.stringify({
           type: 'call_tool',
           name: 'get_live_image',
-          arguments: { visualize_axes: visualizeAxes }
+          arguments: { visualize_axes: visualizeAxes, return_image: true, calling_client: 'web_client' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -440,6 +472,7 @@
           confidence: o.confidence,
           box_2d: o.box_2d,
           ground_center: o.ground_center,
+          color_name: o.color_name,
           imageCoords: null,
           worldCoords: null,
           isTransforming: false
@@ -515,7 +548,7 @@
             body: JSON.stringify({
                 type: 'call_tool',
                 name: 'convert_coordinates',
-                arguments: { x: u, y: v, source: 'pixel', target: 'world' }
+                arguments: { x: u, y: v, source: 'pixel', target: 'world', calling_client: 'web_client' }
             }),
             headers: { 'Content-Type': 'application/json' }
         });
@@ -554,7 +587,7 @@
         body: JSON.stringify({
           type: 'call_tool',
           name: 'convert_coordinates',
-          arguments: { x: u, y: v, source: 'pixel', target: 'world' }
+          arguments: { x: u, y: v, source: 'pixel', target: 'world', calling_client: 'web_client' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -589,7 +622,7 @@
         body: JSON.stringify({
           type: 'call_tool',
           name: 'convert_coordinates',
-          arguments: { x, y, z, source: 'world', target: 'pixel' }
+          arguments: { x, y, z, source: 'world', target: 'pixel', calling_client: 'web_client' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -632,12 +665,12 @@
     const path = [
         home,
         { x: home.x, y: home.y, z: sZ },
-        { x: pickPt.xw, y: pickPt.yw, z: sZ },
-        { x: pickPt.xw, y: pickPt.yw, z: pZ },
-        { x: pickPt.xw, y: pickPt.yw, z: sZ },
-        { x: placePt.xw, y: placePt.yw, z: sZ },
-        { x: placePt.xw, y: placePt.yw, z: plZ },
-        { x: placePt.xw, y: placePt.yw, z: sZ },
+        { x: pickPt.x, y: pickPt.y, z: sZ },
+        { x: pickPt.x, y: pickPt.y, z: pZ },
+        { x: pickPt.x, y: pickPt.y, z: sZ },
+        { x: placePt.x, y: placePt.y, z: sZ },
+        { x: placePt.x, y: placePt.y, z: plZ },
+        { x: placePt.x, y: placePt.y, z: sZ },
         home
     ];
     
@@ -649,9 +682,9 @@
         } else {
             // Fallback: use known image coords for Pick/Place locations
             // This ignores Z visual difference if tool is missing, but keeps lines connected
-            if (p.x === pickPt.xw && p.y === pickPt.yw) {
+            if (p.x === pickPt.x && p.y === pickPt.y) {
                 points2D.push({ u: pickPt.u, v: pickPt.v });
-            } else if (p.x === placePt.xw && p.y === placePt.yw) {
+            } else if (p.x === placePt.x && p.y === placePt.y) {
                 points2D.push({ u: placePt.u, v: placePt.v });
             }
             // Skip Home if conversion fails
@@ -696,7 +729,7 @@
         body: JSON.stringify({
           type: 'call_tool',
           name: 'get_live_image',
-          arguments: { visualize_axes: true }
+          arguments: { visualize_axes: true, return_image: true, calling_client: 'web_client' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -750,7 +783,7 @@
             body: JSON.stringify({
                 type: 'call_tool',
                 name: 'convert_coordinates',
-                arguments: { x: u, y: v, source: 'pixel', target: 'marker' }
+                arguments: { x: u, y: v, source: 'pixel', target: 'marker', calling_client: 'web_client' }
             }),
             headers: { 'Content-Type': 'application/json' }
         });
@@ -761,16 +794,16 @@
                 if (content.type === 'text') {
                     try {
                         const coords = JSON.parse(content.text);
-                        if (typeof coords.x === 'number') {
+                        if (typeof coords.xm === 'number') {
                             // Get World Coordinates from Marker Coordinates
-                            let worldCoords = { x: coords.x, y: coords.y };
+                            let worldCoords = { x: 0, y: 0 };
                             try {
                                 const resWorld = await fetch('/mcp', {
                                     method: 'POST',
                                     body: JSON.stringify({
                                         type: 'call_tool',
                                         name: 'convert_coordinates',
-                                        arguments: { x: coords.x, y: coords.y, z: coords.z || 0, source: 'marker', target: 'world' }
+                                        arguments: { x: coords.xm, y: coords.ym, z: coords.zm || 0, source: 'marker', target: 'world', calling_client: 'web_client' }
                                     }),
                                     headers: { 'Content-Type': 'application/json' }
                                 });
@@ -787,8 +820,8 @@
 
                             const pt = { 
                                 u, v, 
-                                x: coords.x, y: coords.y, // Marker coords
-                                xw: worldCoords.x, yw: worldCoords.y, // World coords
+                                xm: coords.xm, ym: coords.ym, // Marker coords
+                                x: worldCoords.x, y: worldCoords.y, // World coords
                                 u_norm, v_norm
                             };
                             
@@ -815,6 +848,43 @@
     }
   }
 
+  function handlePPMouseMove(event: MouseEvent) {
+    const target = event.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    // Normalize to 0-1000
+    const mx = (x / rect.width) * 1000;
+    const my = (y / rect.height) * 1000;
+    
+    lastPPMousePosition = { x: mx, y: my };
+    updatePPHover();
+  }
+
+  function handlePPMouseLeave() {
+    lastPPMousePosition = null;
+    ppHoveredObject = null;
+  }
+
+  function updatePPHover() {
+      if (!lastPPMousePosition || !ppShowDetections) {
+          ppHoveredObject = null;
+          return;
+      }
+      const { x: mx, y: my } = lastPPMousePosition;
+      let found = null;
+      for (let i = ppDetections.length - 1; i >= 0; i--) {
+          const obj = ppDetections[i];
+          const [ymin, xmin, ymax, xmax] = obj.box_2d;
+          if (mx >= xmin && mx <= xmax && my >= ymin && my <= ymax) {
+              found = obj;
+              break;
+          }
+      }
+      ppHoveredObject = found;
+  }
+
   async function pollDetections() {
     if (!ppLive || !ppShowDetections || ppDetectionPolling) {
         return;
@@ -829,7 +899,8 @@
                 arguments: { 
                     detect_objects: true,
                     return_image: false, // Only get detections
-                    confidence: Number(detectionConfidence) 
+                    confidence: Number(detectionConfidence),
+                    calling_client: 'web_client'
                 }
             }),
             headers: { 'Content-Type': 'application/json' }
@@ -842,6 +913,7 @@
                         const parsed = JSON.parse(content.text);
                         if (parsed.detections && Array.isArray(parsed.detections)) {
                             ppDetections = parsed.detections;
+                            updatePPHover();
                         }
                     } catch (e) {
                         console.error("Error parsing detection poll response:", e);
@@ -897,12 +969,12 @@
     const cmds = [
         "grip open",
         `move z=${safetyZ} s=100`,
-        `move x=${ppPickPoint.xw} y=${ppPickPoint.yw} z=${safetyZ} s=100`,
+        `move x=${ppPickPoint.x} y=${ppPickPoint.y} z=${safetyZ} s=100`,
         `move z=${pickZ} s=50`,
         "grip close",
         "delay t=1000",
         `move z=${safetyZ} s=100`,
-        `move x=${ppPlacePoint.xw} y=${ppPlacePoint.yw} z=${safetyZ} s=100`,
+        `move x=${ppPlacePoint.x} y=${ppPlacePoint.y} z=${safetyZ} s=100`,
         `move z=${placeZ} s=50`,
         "grip open",
         "delay t=1000",
@@ -917,7 +989,7 @@
                 body: JSON.stringify({
                     type: 'call_tool',
                     name: 'execute_sequence',
-                    arguments: { commands: cmd }
+                    arguments: { commands: cmd, calling_client: 'web_client' }
                 }),
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -935,6 +1007,100 @@
     }
   }
 
+  async function pollGeminiLogs() {
+    if (!geminiLive) return;
+    
+    try {
+        const res = await fetch('/mcp', {
+            method: 'POST',
+            body: JSON.stringify({
+                type: 'call_tool',
+                name: 'get_tool_logs',
+                arguments: { calling_client: 'web_client' }
+            }),
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await res.json();
+        
+        if (result.content && Array.isArray(result.content)) {
+            const text = result.content.find((c: any) => c.type === 'text')?.text;
+            if (text) {
+                const logs = JSON.parse(text);
+                // Reverse to show newest first
+                geminiLogs = logs.reverse();
+                
+                // Parse latest relevant logs for visualization
+                if (geminiLogs.length > 0) {
+                    parseGeminiVisuals(geminiLogs);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Gemini log polling failed:", e);
+    }
+    
+    if (geminiLive) {
+        setTimeout(pollGeminiLogs, 1000);
+    }
+  }
+
+  async function parseGeminiVisuals(logs: any[]) {
+      // Find latest detection
+      const detectLog = logs.find((l: any) => l.tool === 'get_live_image' && l.args?.detect_objects);
+      if (detectLog && detectLog.result) {
+          try {
+              const res = JSON.parse(detectLog.result);
+              if (res.detections) {
+                  geminiDetections = res.detections;
+              }
+          } catch (e) {}
+      }
+
+      // Find latest movement sequence
+      const moveLog = logs.find((l: any) => l.tool === 'execute_sequence');
+      if (moveLog && moveLog.args?.commands) {
+          const cmds = moveLog.args.commands.split(';');
+          const points3D = [];
+          
+          // Simple parser for "move x=... y=... z=..."
+          for (const cmd of cmds) {
+              const c = cmd.trim();
+              if (c.startsWith('move')) {
+                  const xMatch = c.match(/x=([-+]?\d*\.?\d+)/);
+                  const yMatch = c.match(/y=([-+]?\d*\.?\d+)/);
+                  const zMatch = c.match(/z=([-+]?\d*\.?\d+)/);
+                  
+                  if (xMatch && yMatch && zMatch) {
+                      points3D.push({
+                          x: parseFloat(xMatch[1]),
+                          y: parseFloat(yMatch[1]),
+                          z: parseFloat(zMatch[1])
+                      });
+                  }
+              }
+          }
+          
+          if (points3D.length > 0) {
+              const points2D = [];
+              for (const p of points3D) {
+                  const uv = await convertWorldToImage(p.x, p.y, p.z);
+                  if (uv) points2D.push(uv);
+              }
+              geminiTrajectoryPoints = points2D;
+          }
+      }
+  }
+
+  function toggleGeminiLive() {
+      geminiLive = !geminiLive;
+      if (geminiLive) {
+          pollGeminiLogs();
+      } else {
+          geminiDetections = [];
+          geminiTrajectoryPoints = [];
+      }
+  }
+
   async function executeSingleCommand(cmd: string) {
     try {
       await fetch('/mcp', {
@@ -942,7 +1108,7 @@
           body: JSON.stringify({
               type: 'call_tool',
               name: 'execute_sequence',
-              arguments: { commands: cmd }
+              arguments: { commands: cmd, calling_client: 'web_client' }
           }),
           headers: { 'Content-Type': 'application/json' }
       });
@@ -994,7 +1160,7 @@
           const text = result.content.find((c: any) => c.type === 'text')?.text;
           if (text) {
             const state = JSON.parse(text);
-            const scale = 15 / 128; // UI scale factor
+            const scale = 10 / 128; // UI scale factor
             joypadLeft = { x: (state.X ?? 0) * scale, y: (state.Y ?? 0) * scale };
             joypadRight = { x: (state.RX ?? 0) * scale, y: (state.RY ?? 0) * scale };
           }
@@ -1097,7 +1263,7 @@
             </div>
             <div class="input-group input-group-sm" style="width: auto;">
               <span class="input-group-text">{t.confidence}</span>
-              <input type="number" class="form-control" style="width: 60px;" bind:value={detectionConfidence} min="0.1" max="1.0" step="0.1">
+              <input type="number" class="form-control" style="width: 80px;" bind:value={detectionConfidence} min="0.1" max="1.0" step="0.1">
             </div>
             <button class="btn btn-primary" onclick={captureImage} disabled={capturing}>
               {capturing ? t.capturing : t.capture}
@@ -1119,9 +1285,9 @@
             <div class="position-relative d-inline-block">
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-              <img src={cameraImage} alt="Robot Camera View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handleImageClick} />
+              <img src={cameraImage} alt="Robot Camera View" class="img-fluid border rounded" style="max-height: 440px; cursor: crosshair;" onclick={handleImageClick} />
               {#each detectedObjects as obj, i}
-                {@const color = getColorForLabel(obj.label)}
+                {@const color = getColorForObject(obj)}
                 {#if obj.ground_center}
                     {@const groundContactX = obj.ground_center.u_norm / 10}
                     {@const groundContactY = obj.ground_center.v_norm / 10}
@@ -1139,7 +1305,7 @@
                     <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
                 {/if}
                 <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
-                  <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
+                  <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}{obj.color_name ? ` (${obj.color_name})` : ''}</span>
                 </div>
                 {#if obj.ground_center}
                     <div style="position: absolute; left: {obj.ground_center.u_norm / 10}%; top: {obj.ground_center.v_norm / 10}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 5;">
@@ -1177,60 +1343,73 @@
         </div>
       </div>
       <div class="tab-pane fade" id="pp-tab-pane" role="tabpanel" aria-labelledby="pp-tab" tabindex="0">
-        <div class="d-flex flex-column align-items-center mt-3">
-          <div class="mb-3 d-flex gap-2 align-items-center flex-wrap justify-content-center">
-            <button class="btn {ppLive ? 'btn-danger' : 'btn-outline-danger'}" onclick={toggleLive}>
-              {ppLive ? t.stop_live : t.live}
-            </button>
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={ppShowDetections}>
-              <label class="form-check-label" for="ppShowDetectionsSwitch">{t.show_detections}</label>
+        <div class="d-flex flex-column align-items-center mt-2">
+          <!-- Control Panel -->
+          <div class="d-flex flex-column gap-2 mb-2 w-100 align-items-center">
+            <!-- Row 1: Camera & Detection -->
+            <div class="d-flex gap-2 flex-wrap justify-content-center">
+               <div class="border rounded p-2 d-flex gap-2 align-items-center bg-light shadow-sm">
+                  <button class="btn {ppLive ? 'btn-danger' : 'btn-outline-danger'} btn-sm" onclick={toggleLive}>
+                    {ppLive ? t.stop_live : t.live}
+                  </button>
+                  <div class="vr mx-1"></div>
+                  <button class="btn btn-secondary btn-sm" onclick={clearPPPoints} disabled={ppExecuting}>
+                    {t.clear}
+                  </button>
+                  <button class="btn btn-success btn-sm" onclick={runPickAndPlace} disabled={!ppPickPoint || !ppPlacePoint || ppExecuting}>
+                    {ppExecuting ? t.running : t.pick_place}
+                  </button>
+               </div>
+               <div class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center">
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={ppShowDetections}>
+                    <label class="form-check-label" for="ppShowDetectionsSwitch">{t.show_detections}</label>
+                  </div>
+                  <div class="input-group input-group-sm" style="width: auto;">
+                      <span class="input-group-text">{t.interval_ms}</span>
+                      <input type="text" class="form-control" style="width: 65px;" bind:value={ppDetectionInterval} disabled={!ppShowDetections}>
+                  </div>
+                  <div class="input-group input-group-sm" style="width: auto;">
+                      <span class="input-group-text">{t.confidence}</span>
+                      <input type="number" class="form-control" style="width: 65px;" bind:value={detectionConfidence} min="0.1" max="1.0" step="0.1" disabled={!ppShowDetections}>
+                  </div>
+               </div>
             </div>
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" role="switch" id="ppShowTrajectorySwitch" bind:checked={ppShowTrajectory}>
-              <label class="form-check-label" for="ppShowTrajectorySwitch">{t.show_trajectory}</label>
-            </div>
-            <div class="input-group input-group-sm" style="width: auto;">
-                <span class="input-group-text">{t.interval_ms}</span>
-                <input type="text" class="form-control" style="width: 60px;" bind:value={ppDetectionInterval} disabled={!ppShowDetections}>
-            </div>
-            <div class="input-group input-group-sm" style="width: auto;">
-                <span class="input-group-text">{t.confidence}</span>
-                <input type="number" class="form-control" style="width: 60px;" bind:value={detectionConfidence} min="0.1" max="1.0" step="0.1" disabled={!ppShowDetections}>
-            </div>
-            <button class="btn btn-secondary" onclick={clearPPPoints} disabled={ppExecuting}>
-              {t.clear}
-            </button>
-            <button class="btn btn-success" onclick={runPickAndPlace} disabled={!ppPickPoint || !ppPlacePoint || ppExecuting}>
-              {ppExecuting ? t.running : t.pick_place}
-            </button>
-
-            <div class="input-group input-group-sm" style="width: auto;">
-                <span class="input-group-text px-1">Pick</span>
-                <input type="number" class="form-control px-1" style="width: 55px;" bind:value={ppPickZ}>
-                <span class="input-group-text px-1">Place</span>
-                <input type="number" class="form-control px-1" style="width: 55px;" bind:value={ppPlaceZ}>
-                <span class="input-group-text px-1">Safe</span>
-                <input type="number" class="form-control px-1" style="width: 55px;" bind:value={ppSafetyZ}>
+            <!-- Row 2: P&P Settings & Actions -->
+            <div class="d-flex gap-2 flex-wrap justify-content-center">
+               <div class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center">
+                  <div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" role="switch" id="ppShowTrajectorySwitch" bind:checked={ppShowTrajectory}>
+                    <label class="form-check-label" for="ppShowTrajectorySwitch">{t.show_trajectory}</label>
+                  </div>
+                  <div class="input-group input-group-sm" style="width: auto;">
+                      <span class="input-group-text px-1">Pick Z</span>
+                      <input type="number" class="form-control px-1" style="width: 65px;" bind:value={ppPickZ}>
+                      <span class="input-group-text px-1">Place Z</span>
+                      <input type="number" class="form-control px-1" style="width: 65px;" bind:value={ppPlaceZ}>
+                      <span class="input-group-text px-1">Safe Z</span>
+                      <input type="number" class="form-control px-1" style="width: 65px;" bind:value={ppSafetyZ}>
+                  </div>
+               </div>
             </div>
           </div>
           
           {#if ppImage}
-            <div class="position-relative d-inline-block">
+            <div class="position-relative d-inline-block" onmousemove={handlePPMouseMove} onmouseleave={handlePPMouseLeave} role="group">
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
               <img 
                 src={ppImage} 
                 alt="Pick & Place View" 
                 class="img-fluid border rounded" 
-                style="max-height: 500px; cursor: crosshair;" 
+                style="max-height: 440px; cursor: crosshair;" 
                 onclick={handlePPImageClick}
                 onload={(e) => { const img = e.currentTarget as HTMLImageElement; ppImageDim = { w: img.naturalWidth, h: img.naturalHeight }; }} 
               />
               
               {#if ppShowDetections}
                 {#each ppDetections as obj}
-                  {@const color = getColorForLabel(obj.label)}
+                  {@const color = getColorForObject(obj)}
                   {#if obj.ground_center}
                       {@const groundContactX = obj.ground_center.u_norm / 10}
                       {@const groundContactY = obj.ground_center.v_norm / 10}
@@ -1248,7 +1427,7 @@
                       <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
                   {/if}
                   <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
-                    <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
+                    <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}{ppHoveredObject === obj && obj.color_name ? ` (${obj.color_name})` : ''}</span>
                   </div>
                 {/each}
               {/if}
@@ -1275,8 +1454,8 @@
                     <div style="position: absolute; top: -10px; left: 15px; background: rgba(0,0,0,0.5); color: white; padding: 4px; border-radius: 4px; font-size: 0.8em; white-space: nowrap;">
                         <div style="font-weight: bold; color: #d0a0ff;">Pick</div>
                         <div>u:{pt.u}, v:{pt.v}</div>
+                        <div>xm:{pt.xm.toFixed(1)}, ym:{pt.ym.toFixed(1)}</div>
                         <div>x:{pt.x.toFixed(1)}, y:{pt.y.toFixed(1)}</div>
-                        <div>xw:{pt.xw.toFixed(1)}, yw:{pt.yw.toFixed(1)}</div>
                     </div>
                 </div>
               {/if}
@@ -1288,8 +1467,8 @@
                     <div style="position: absolute; top: -10px; left: 15px; background: rgba(0,0,0,0.5); color: white; padding: 4px; border-radius: 4px; font-size: 0.8em; white-space: nowrap;">
                         <div style="font-weight: bold; color: #a0a0ff;">Place</div>
                         <div>u:{pt.u}, v:{pt.v}</div>
+                        <div>xm:{pt.xm.toFixed(1)}, ym:{pt.ym.toFixed(1)}</div>
                         <div>x:{pt.x.toFixed(1)}, y:{pt.y.toFixed(1)}</div>
-                        <div>xw:{pt.xw.toFixed(1)}, yw:{pt.yw.toFixed(1)}</div>
                     </div>
                 </div>
               {/if}
@@ -1301,7 +1480,7 @@
           {/if}
           
           <!-- Joypad Visualization -->
-          <div class="d-flex flex-column align-items-center mt-3 mb-3 p-2 border rounded bg-light">
+          <div class="d-flex flex-column align-items-center mt-1 mb-1 p-1 border rounded bg-light">
             <div class="d-flex gap-4 justify-content-center">
                 <div class="joypad-stick">
                     <div class="stick-label">{t.joypad_left}</div>
@@ -1320,8 +1499,90 @@
         </div>
       </div>
       <div class="tab-pane fade" id="gemini-tab-pane" role="tabpanel" aria-labelledby="gemini-tab" tabindex="0">
-        <div class="p-5 text-center text-muted">
-          <h4>{t.gemini_placeholder}</h4>
+        <div class="container-fluid mt-3">
+            <div class="row mb-3">
+                <div class="col-12 d-flex align-items-center gap-3">
+                    <button class="btn {geminiLive ? 'btn-danger' : 'btn-outline-danger'}" onclick={toggleGeminiLive}>
+                        {geminiLive ? t.stop_live : t.live}
+                    </button>
+                    <span class="text-muted">{t.gemini_monitor_desc}</span>
+                </div>
+            </div>
+            <div class="row">
+                <!-- Left: Live Monitor -->
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">Live Monitor</div>
+                        <div class="card-body text-center p-0 bg-dark position-relative" style={geminiLive ? "" : "min-height: 400px;"}>
+                            {#if geminiLive}
+                                <img 
+                                    src={`http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`} 
+                                    alt="Gemini Monitor View" 
+                                    class="img-fluid" 
+                                    style="max-height: 440px;"
+                                    onload={(e) => { const img = e.currentTarget as HTMLImageElement; geminiImageDim = { w: img.naturalWidth, h: img.naturalHeight }; }}
+                                />
+                                
+                                <!-- Detections Overlay -->
+                                {#each geminiDetections as obj}
+                                    {@const color = getColorForObject(obj)}
+                                    <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
+                                        <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}{obj.color_name ? ` (${obj.color_name})` : ''} ({obj.confidence.toFixed(2)})</span>
+                                    </div>
+                                {/each}
+
+                                <!-- Trajectory Overlay -->
+                                {#if geminiTrajectoryPoints.length > 0 && geminiImageDim}
+                                    <svg viewBox="0 0 {geminiImageDim.w} {geminiImageDim.h}" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
+                                        <polyline 
+                                            points={geminiTrajectoryPoints.map(p => `${p.u},${p.v}`).join(' ')}
+                                            fill="none"
+                                            stroke="lime" 
+                                            stroke-width="3" 
+                                            stroke-dasharray="5,5"
+                                        />
+                                        {#each geminiTrajectoryPoints as p}
+                                            <circle cx="{p.u}" cy="{p.v}" r="4" fill="lime" />
+                                        {/each}
+                                    </svg>
+                                {/if}
+                            {:else}
+                                <div class="d-flex align-items-center justify-content-center h-100 text-white">
+                                    <p>Offline</p>
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Right: Tool Logs -->
+                <div class="col-md-6">
+                    <div class="card" style="height: 440px;">
+                        <div class="card-header">Tool Execution Log</div>
+                        <div class="card-body overflow-auto p-0">
+                            <div class="list-group list-group-flush">
+                                {#each geminiLogs as log}
+                                    <div class="list-group-item">
+                                        <div class="d-flex w-100 justify-content-between">
+                                            <h6 class="mb-1 text-primary">{log.tool}</h6>
+                                            <small class="text-muted">{new Date(log.timestamp * 1000).toLocaleTimeString()}</small>
+                                        </div>
+                                        <div class="mb-1 small">
+                                            <strong>Args:</strong> <span class="text-break">{JSON.stringify(log.args)}</span>
+                                        </div>
+                                        <div class="small">
+                                            <strong>Result:</strong> <span class="text-muted text-break">{log.result}</span>
+                                        </div>
+                                    </div>
+                                {/each}
+                                {#if geminiLogs.length === 0}
+                                    <div class="p-3 text-center text-muted">No logs available</div>
+                                {/if}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
       </div>
       <div class="tab-pane fade" id="home-tab-pane" role="tabpanel" aria-labelledby="home-tab" tabindex="0">
@@ -1438,8 +1699,8 @@
         font-weight: bold;
     }
     .stick-base {
-        width: 60px;
-        height: 60px;
+        width: 40px;
+        height: 40px;
         border-radius: 50%;
         background-color: #ddd;
         border: 2px solid #bbb;
@@ -1449,8 +1710,8 @@
         align-items: center;
     }
     .stick-knob {
-        width: 30px;
-        height: 30px;
+        width: 20px;
+        height: 20px;
         border-radius: 50%;
         background-color: #555;
         transition: transform 0.2s ease;
