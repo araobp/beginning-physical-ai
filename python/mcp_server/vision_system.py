@@ -506,6 +506,28 @@ class VisionSystem:
             
         return detections
 
+    def convert_world_coords_to_image(self, x: float, y: float, z: float):
+        """
+        3D世界座標(x, y, z) [mm] を 2D画像座標(u, v) [px] に変換する。
+        """
+        if self.rvec is None or self.tvec is None:
+            return None
+
+        try:
+            object_point = np.array([[x, y, z]], dtype=np.float32)
+            image_points, _ = cv2.projectPoints(
+                object_point,
+                self.rvec,
+                self.tvec,
+                self.mtx,
+                self.dist
+            )
+            u, v = image_points[0][0]
+            return {"u": int(round(u)), "v": int(round(v))}
+        except Exception as e:
+            print(f"Projection error: {e}")
+            return None
+
     def convert_2d_to_3d(self, u, v, draw_target=False, rvec=None, tvec=None):
         """
         歪み補正済み画像の2Dピクセル座標(u, v)を、3D世界座標(x, y, z=0) [mm] に変換する。

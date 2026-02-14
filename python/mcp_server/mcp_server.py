@@ -251,7 +251,7 @@ TOOL_DOCS = {
 
     [Data Structure Details]
     - name: Name of the workpiece.
-    - gripping_height: Gripping height of the workpiece (mm). This is the Z coordinate to which the arm should descend to grip the object.
+    - gripping_height: Gripping height of the workpiece (mm). This is the Z coordinate to which the arm should descend to grip the object. If this value is 0, the object is not intended for gripping.
     - description: Supplementary information.
 
     [Important: Formula for Safe Path Planning]
@@ -263,7 +263,7 @@ TOOL_DOCS = {
 
     [Command Syntax]
     1. move x=<val> y=<val> z=<val> s=<speed>:
-       Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm) in the **Robot Base Coordinate System**.
+       Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm) in the **World Coordinate System (Robot Base)**.
        s is the speed, range 0-100.
     2. grip <open|close>:
        Opens or closes the gripper.
@@ -275,30 +275,24 @@ TOOL_DOCS = {
     - **Use Safety Height**: Before horizontal movement, calculate safety height using `get_workpiece_catalog`.
     - **Collision Avoidance**: Always raise to safety height before moving horizontally after gripping.
     """,
-        'execute_sequence_marker_coords': """
-    Executes a command sequence described in the **ArUco Marker Coordinate System** (origin at marker).
-    The `x`, `y`, `z` in the commands are interpreted as marker coordinates.
-    Automatically adds offsets to convert to Robot Base Coordinates.
-
-    [Coordinate Transformation]
-    x_world = x_marker + ROBOT_BASE_OFFSET_X
-    y_world = y_marker + ROBOT_BASE_OFFSET_Y
-    Z coordinates are unchanged.
-
-    Args:
-        commands (str): Semicolon-separated commands. e.g., "move x=0 y=0 z=50 s=50; grip close"
+        'get_robot_status': """
+    Retrieves the current status of the robot arm.
+    Returns a string containing TCP coordinates in **World Coordinate System (mm)**, joint angles, and other status info.
+    Use this to understand the arm's current position before planning movements.
     """,
-        'get_robot_status': "Retrieves the current status of the robot arm (TCP coordinates, joint angles, etc.). Use this to understand the arm's current position before planning movements.",
-        'get_joypad_state': "Retrieves the current input state (axis values) of the joypad. Returns JSON: {'X': float, 'Y': float, 'RX': float, 'RY': float}",
+        'get_joypad_state': """
+    Retrieves the current input state of the joypad.
+    Returns JSON: {'X': float, 'Y': float, 'RX': float, 'RY': float}
+    Values are typically between -1.0 and 1.0.
+    """,
         'get_live_image': """
     Captures a live frame and/or detects objects. Returns JSON `{'image_jpeg_base64': '...', 'detections': [...]}`.
 
     [Coordinate Systems & Parameters]
-    - **x, y, z**: Coordinates in ArUco Marker Coordinate System (origin at marker, mm).
-    - **xw, yw, zw**: Coordinates in Robot Base Coordinate System (origin at robot base, mm). Use these for `execute_sequence`.
+    - **x, y, z**: Coordinates in World Coordinate System (Robot Base, mm).
     - **r**: Estimated radius of the object (mm).
     - **h**: Estimated height of the object (mm).
-    - **u, v**: Pixel coordinates on the image (px).
+    - **u, v**: Pixel Coordinates on the image (px).
     - **u_norm, v_norm**: Normalized image coordinates (0-1000).
     - **u_top_norm, v_top_norm**: Normalized image coordinates of the object's top center (0-1000).
     - **radius_u_norm, radius_v_norm**: Normalized radius on the image.
@@ -311,18 +305,21 @@ TOOL_DOCS = {
         confidence (float): Confidence threshold for detection (default 0.7).
         return_image (bool): If True, returns the Base64 encoded image. If False, returns only detection results.
     """,
-        'convert_image_coords_to_world': """
-    Converts pixel coordinates (u, v) from the undistorted image to real-world coordinates (x, y) [mm] on the robot's working plane (Z=0).
+        'convert_coordinates': """
+    Converts coordinates between World, ArUco Marker, and Pixel coordinate systems.
 
-    [Returns JSON]
-    - **x, y**: Coordinates in ArUco Marker Coordinate System (mm).
-    - **xw, yw**: Coordinates in Robot Base Coordinate System (mm). Use these for robot commands.
+    [Coordinate Systems]
+    - 'world': World Coordinate System (Robot Base, mm).
+    - 'marker': ArUco Marker Coordinate System (mm).
+    - 'pixel': Pixel Coordinates (u, v).
 
-    Prerequisites: ArUco marker must be visible.
-    Args: u (int), v (int).
+    Args:
+        x (float): X coordinate (or u for pixel).
+        y (float): Y coordinate (or v for pixel).
+        z (float): Z coordinate (default 0.0). Ignored if source is 'pixel' (assumes Z=0 on marker plane).
+        source (str): Source coordinate system ('world', 'marker', 'pixel').
+        target (str): Target coordinate system ('world', 'marker', 'pixel').
     """,
-        'set_pick_place_points': "Sets Pick/Place positions and Z heights (pick, place, safety) in the VisionSystem to enable trajectory drawing. Coordinates are in Marker Coordinate System (mm).",
-        'clear_pick_place_points': "Clears Pick/Place positions set in the VisionSystem and disables trajectory drawing."
     },
     'ja': {
         'get_workpiece_catalog': """
@@ -334,7 +331,7 @@ TOOL_DOCS = {
 
     【データ構造の詳細】
     - name: ワークの名称（日本語）
-    - gripping_height: ワークを把持する際のZ座標 (mm)。アームを下降させる際の目標高さとなります。
+    - gripping_height: ワークを把持する際のZ座標 (mm)。アームを下降させる際の目標高さとなります。この値が0の場合は、把持対象ではないことを意味します。
     - description: ワークに関する補足情報。
     """,
         'execute_sequence': """
@@ -343,7 +340,7 @@ TOOL_DOCS = {
     【コマンド文法】
     1. move x=<値> y=<値> z=<値> s=<速度>:
        アームの先端 (TCP: Tool Center Point) を指定の3次元座標 (mm) へ移動させます。
-       **座標系は「ロボットベース座標系（世界座標系）」です。**
+       **座標系は「世界座標系（ロボットベース原点, mm）」です。**
        sは移動速度で、0から100の範囲で指定します。
     2. grip <open|close>:
        グリッパーを開きます ('open') または閉じます ('close')。
@@ -352,32 +349,28 @@ TOOL_DOCS = {
 
     【AI管制官への絶対遵守ルール：経路計画】
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
-    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください (安全高度 = gripping_height + 50.0)。
+    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください (例: 安全高度 = gripping_height + 50.0)。また、物体検出により高さ(h)が推定されている場合は、その高さに十分なマージンを加えた値を安全高度として考慮してください。
     - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。低い高度のまま直線的に移動すると、他の物体と衝突する危険があります。
     """,
-        'execute_sequence_marker_coords': """
-    **ArUcoマーカー座標系**（マーカー原点）で記述されたコマンドシーケンスを実行します。
-    コマンド内の `x`, `y`, `z` はマーカー座標系として解釈されます。
-    指定された座標(mm)に対して、自動的にロボットベース座標系へのオフセットを加算して実行します。
-    
-    【座標変換】
-    入力された x, y (mm) に対して、システム設定のオフセット(mm)を加算します。
-    Args:
-        commands (str): セミコロン区切りのコマンド列。
-                        例: "move x=0 y=0 z=50 s=50; grip close"
+        'get_robot_status': """
+    ロボットアームの現在の状態を取得します。
+    **世界座標系（mm）**でのTCP座標、各関節の角度などが含まれる文字列を返します。
+    動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。
     """,
-        'get_robot_status': "ロボットアームの現在の状態（TCP座標、各関節の角度など）を取得します。\n動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。",
-        'get_joypad_state': "現在のジョイパッドの入力状態（各軸の値）を取得します。\n戻り値 (JSON): {\"X\": float, \"Y\": float, \"RX\": float, \"RY\": float}",
+        'get_joypad_state': """
+    現在のジョイパッドの入力状態を取得します。
+    戻り値 (JSON): {'X': float, 'Y': float, 'RX': float, 'RY': float}
+    値は通常 -1.0 から 1.0 の範囲です。
+    """,
         'get_live_image': """
     カメラから歪み補正済みのライブ映像や物体検出結果を取得します。
     返り値は `{"image_jpeg_base64": "...", "detections": [...]}` という形式のJSON文字列です。
 
     【座標系とパラメータの定義】
-    - **x, y, z**: ArUcoマーカー座標系（マーカー原点）での3次元座標 (mm)。
-    - **xw, yw, zw**: ロボットベース座標系（ロボット原点）での3次元座標 (mm)。`execute_sequence` での移動指令にはこの値を使用します。
+    - **x, y, z**: 世界座標系（ロボットベース原点）での3次元座標 (mm)。`execute_sequence` での移動指令にはこの値を使用します。
     - **r**: 物体の推定半径 (mm)。
     - **h**: 物体の推定高さ (mm)。
-    - **u, v**: 画像上のピクセル座標 (px)。
+    - **u, v**: 画像上のピクセル座標 (ピクセル座標系, px)。
     - **u_norm, v_norm**: 画像サイズを0-1000に正規化した座標。
     - **u_top_norm, v_top_norm**: 物体上端中心の正規化画像座標 (0-1000)。
     - **radius_u_norm, radius_v_norm**: 正規化された画像上の半径（幅・高さ）。
@@ -390,23 +383,21 @@ TOOL_DOCS = {
         confidence (float): 検出の信頼度しきい値 (デフォルト0.7)。
         return_image (bool): Trueの場合、Base64エンコードされた画像を返します。Falseの場合、検出結果のみを返します。
     """,
-        'convert_image_coords_to_world': """
-    歪み補正済み画像のピクセル座標(u, v)を、ロボットの作業平面(Z=0)上の実世界座標に変換します。
+        'convert_coordinates': """
+    世界座標系、ArUcoマーカ座標系、ピクセル座標系の間で座標変換を行います。
 
-    【戻り値 (JSON)】
-    - **x, y**: ArUcoマーカー座標系での座標 (mm)。
-    - **xw, yw**: ロボットベース座標系での座標 (mm)。アーム操作(execute_sequence)にはこの値を使用してください。
-
-    【前提条件】
-    - この座標変換は、カメラの映像内に基準となるArUcoマーカーが明確に映っている必要があります。
-    - マーカーが検出できない場合、座標変換は失敗し、エラーメッセージを返します。
+    【座標系の定義】
+    - 'world': 世界座標系（ロボットベース原点, mm）。
+    - 'marker': ArUcoマーカ座標系（マーカー原点, mm）。
+    - 'pixel': ピクセル座標系（画像上の u, v）。
 
     Args:
-        u (int): 変換したい画像の水平方向（横軸）のピクセル座標。
-        v (int): 変換したい画像の垂直方向（縦軸）のピクセル座標。
+        x (float): X座標（ピクセルの場合は u）。
+        y (float): Y座標（ピクセルの場合は v）。
+        z (float): Z座標（デフォルト 0.0）。sourceが'pixel'の場合は無視されます（マーカー平面Z=0と仮定）。
+        source (str): 変換元の座標系 ('world', 'marker', 'pixel')。
+        target (str): 変換先の座標系 ('world', 'marker', 'pixel')。
     """,
-        'set_pick_place_points': "VisionSystemにPick位置とPlace位置を設定し、ストリーミング映像への軌道描画を有効にします。\n座標はマーカー座標系(mm)です。",
-        'clear_pick_place_points': "VisionSystemに設定されたPick/Place位置をクリアし、軌道描画を無効にします。"
     }
 }
 
@@ -421,43 +412,6 @@ def get_workpiece_catalog() -> str:
 @set_doc(DOCS['execute_sequence'])
 def execute_sequence(commands: str) -> str:
     return send_command(commands)
-
-def _transform_marker_to_world_cmd(cmd: str) -> str:
-    """
-    マーカー座標系のmoveコマンドを世界座標系に変換するヘルパー関数
-    """
-    cmd = cmd.strip()
-    if not cmd.startswith("move"):
-        return cmd
-    
-    def replace_val(match, offset_mm):
-        try:
-            val = float(match.group(1))
-            # オフセット(mm)を加算
-            new_val = val + offset_mm
-            return f"{match.group(0)[0]}={new_val:.2f}"
-        except ValueError:
-            return match.group(0)
-
-    # x=値 を置換
-    cmd = re.sub(r'x=([-+]?\d*\.?\d+)', lambda m: replace_val(m, ROBOT_BASE_OFFSET_X), cmd)
-    # y=値 を置換
-    cmd = re.sub(r'y=([-+]?\d*\.?\d+)', lambda m: replace_val(m, ROBOT_BASE_OFFSET_Y), cmd)
-    
-    return cmd
-
-@mcp.tool()
-@set_doc(DOCS['execute_sequence_marker_coords'])
-def execute_sequence_marker_coords(commands: str) -> str:
-    cmd_list = commands.split(';')
-    converted_cmds = []
-    for cmd in cmd_list:
-        if not cmd.strip(): continue
-        converted_cmds.append(_transform_marker_to_world_cmd(cmd))
-    
-    full_sequence = ";".join(converted_cmds)
-    print(f"[Marker->World] {commands} -> {full_sequence}")
-    return send_command(full_sequence)
 
 @mcp.tool()
 @set_doc(DOCS['get_robot_status'])
@@ -502,54 +456,59 @@ def get_live_image(visualize_axes: bool = True, detect_objects: bool = False, co
     return json.dumps(resp, ensure_ascii=False)
 
 @mcp.tool()
-@set_doc(DOCS['convert_image_coords_to_world'])
-def convert_image_coords_to_world(u: int, v: int) -> str:
+@set_doc(DOCS['convert_coordinates'])
+def convert_coordinates(x: float, y: float, z: float = 0.0, source: str = 'world', target: str = 'pixel') -> str:
     vs = get_vision_system()
     if not vs:
         return "Error: Vision system is not available."
-
-    # 座標変換のために最新のマーカー姿勢を取得・更新する
-    vs.update_pose(visualize_axes=True)
-
-    coords, _ = vs.convert_2d_to_3d(u, v, draw_target=False)
     
-    if coords:
-        response_data = coords
-        # ロボットベース座標系(mm)への変換
-        raw_x = response_data["x"]
-        raw_y = response_data["y"]
-        
-        response_data["x"] = round(raw_x, 1)
-        response_data["y"] = round(raw_y, 1)
-        response_data["xw"] = round(raw_x + ROBOT_BASE_OFFSET_X, 1)
-        response_data["yw"] = round(raw_y + ROBOT_BASE_OFFSET_Y, 1)
-
-        return json.dumps(response_data)
+    # Update pose
+    vs.update_pose(visualize_axes=False)
+    
+    # 1. Normalize to Marker Coordinates (x_m, y_m, z_m)
+    x_m, y_m, z_m = 0.0, 0.0, 0.0
+    
+    if source == 'world':
+        x_m = x - ROBOT_BASE_OFFSET_X
+        y_m = y - ROBOT_BASE_OFFSET_Y
+        z_m = z
+    elif source == 'marker':
+        x_m = x
+        y_m = y
+        z_m = z
+    elif source == 'pixel':
+        # x is u, y is v
+        # convert_2d_to_3d assumes Z=0 on marker plane
+        coords, _ = vs.convert_2d_to_3d(x, y, draw_target=False)
+        if not coords:
+             return "Error: Could not convert pixel coordinates. Marker might not be visible."
+        x_m = coords['x']
+        y_m = coords['y']
+        z_m = coords['z'] # 0.0
     else:
-        return "Error: Could not perform coordinate conversion. Ensure the ArUco marker is clearly visible to the camera."
+        return f"Error: Unknown source coordinate system '{source}'"
 
-@mcp.tool()
-@set_doc(DOCS['set_pick_place_points'])
-def set_pick_place_points(pick_x: float, pick_y: float, place_x: float, place_y: float, pick_z: float, place_z: float, safety_z: float) -> str:
-    vs = get_vision_system()
-    if vs:
-        vs.pick_point = {'x': pick_x, 'y': pick_y}
-        vs.place_point = {'x': place_x, 'y': place_y}
-        vs.pick_z = pick_z
-        vs.place_z = place_z
-        vs.safety_z = safety_z
-        return "Points and Z values set"
-    return "Error: Vision system not ready"
-
-@mcp.tool()
-@set_doc(DOCS['clear_pick_place_points'])
-def clear_pick_place_points() -> str:
-    vs = get_vision_system()
-    if vs:
-        vs.pick_point = None
-        vs.place_point = None
-        return "Points cleared"
-    return "Error: Vision system not ready"
+    # 2. Convert to Target
+    if target == 'world':
+        return json.dumps({
+            "x": round(x_m + ROBOT_BASE_OFFSET_X, 1),
+            "y": round(y_m + ROBOT_BASE_OFFSET_Y, 1),
+            "z": round(z_m, 1)
+        })
+    elif target == 'marker':
+        return json.dumps({
+            "x": round(x_m, 1),
+            "y": round(y_m, 1),
+            "z": round(z_m, 1)
+        })
+    elif target == 'pixel':
+        res = vs.convert_world_coords_to_image(x_m, y_m, z_m)
+        if res:
+            return json.dumps(res)
+        else:
+            return "Error: Could not project to pixel coordinates."
+    else:
+        return f"Error: Unknown target coordinate system '{target}'"
 
 # --- ジョイパッド制御用 ---
 joypad_axis_values = {'X': 0, 'Y': 0, 'RX': 0, 'RY': 0}

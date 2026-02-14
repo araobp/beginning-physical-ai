@@ -42,16 +42,13 @@
   let ppDetectionInterval = $state(500); // ms
   let ppDetections = $state<any[]>([]);
   let ppDetectionPolling = $state(false);
+  let ppShowTrajectory = $state(false);
+  let ppTrajectoryPoints = $state<{u: number, v: number}[]>([]);
+  let ppImageDim = $state<{w: number, h: number} | null>(null);
   let joypadLeft = $state({ x: 0, y: 0 });
   let joypadRight = $state({ x: 0, y: 0 });
   let currentRobotPos = $state({ x: 0, y: 0, z: 0 });
   let lastJoypadState = $state<Record<string, any>>({});
-
-  $effect(() => {
-    if (ppPickPoint && ppPlacePoint) {
-      updateServerPoints();
-    }
-  });
 
   let ppDetectionTimeout: any = null;
   $effect(() => {
@@ -65,6 +62,14 @@
       ppDetections = [];
     }
     return () => clearTimeout(ppDetectionTimeout);
+  });
+
+  $effect(() => {
+    if (ppPickPoint && ppPlacePoint && ppShowTrajectory) {
+        updateTrajectory(ppPickPoint, ppPlacePoint, ppPickZ, ppPlaceZ, ppSafetyZ);
+    } else {
+        ppTrajectoryPoints = [];
+    }
   });
 
   // Language Settings
@@ -103,6 +108,7 @@
       show_detections: "物体検出",
       interval_ms: "更新間隔(ms)",
       confidence: "信頼度",
+      show_trajectory: "軌道表示",
     },
     en: {
       title: "The Cheapest 4-DoF Robot Arm",
@@ -135,6 +141,7 @@
       show_detections: "Object Detection",
       interval_ms: "Interval (ms)",
       confidence: "Confidence",
+      show_trajectory: "Show Trajectory",
     }
   };
 
@@ -507,8 +514,8 @@
             method: 'POST',
             body: JSON.stringify({
                 type: 'call_tool',
-                name: 'convert_image_coords_to_world',
-                arguments: { u, v }
+                name: 'convert_coordinates',
+                arguments: { x: u, y: v, source: 'pixel', target: 'world' }
             }),
             headers: { 'Content-Type': 'application/json' }
         });
@@ -546,8 +553,8 @@
         method: 'POST',
         body: JSON.stringify({
           type: 'call_tool',
-          name: 'convert_image_coords_to_world',
-          arguments: { u, v }
+          name: 'convert_coordinates',
+          arguments: { x: u, y: v, source: 'pixel', target: 'world' }
         }),
         headers: { 'Content-Type': 'application/json' }
       });
@@ -573,6 +580,84 @@
       console.error('Conversion failed:', e);
       alert(`Error: ${e.message}`);
     }
+  }
+
+  async function convertWorldToImage(x: number, y: number, z: number) {
+    try {
+      const res = await fetch('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'call_tool',
+          name: 'convert_coordinates',
+          arguments: { x, y, z, source: 'world', target: 'pixel' }
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await res.json();
+      if (result.content && Array.isArray(result.content)) {
+        for (const content of result.content) {
+            if (content.type === 'text') {
+                try {
+                    const coords = JSON.parse(content.text);
+                    if (typeof coords.u === 'number' && typeof coords.v === 'number') {
+                        return { u: coords.u, v: coords.v };
+                    }
+                } catch (e) {}
+            }
+        }
+      }
+    } catch (e: any) {
+      console.warn("convert_coordinates failed (tool might be missing on server):", e.message);
+    }
+    return null;
+  }
+
+  async function updateTrajectory(pickPt: any, placePt: any, pickZ: number, placeZ: number, safetyZ: number) {
+    // Check if the conversion tool is available
+    const hasTool = tools.some(t => t.name === 'convert_coordinates');
+    if (!hasTool) {
+        // Fallback: just draw a line between Pick and Place
+        ppTrajectoryPoints = [
+            { u: pickPt.u, v: pickPt.v },
+            { u: placePt.u, v: placePt.v }
+        ];
+        return;
+    }
+
+    const home = { x: 110, y: 0, z: 70 };
+    const pZ = Math.max(0, pickZ);
+    const plZ = Math.max(0, placeZ);
+    const sZ = Math.max(0, safetyZ);
+
+    const path = [
+        home,
+        { x: home.x, y: home.y, z: sZ },
+        { x: pickPt.xw, y: pickPt.yw, z: sZ },
+        { x: pickPt.xw, y: pickPt.yw, z: pZ },
+        { x: pickPt.xw, y: pickPt.yw, z: sZ },
+        { x: placePt.xw, y: placePt.yw, z: sZ },
+        { x: placePt.xw, y: placePt.yw, z: plZ },
+        { x: placePt.xw, y: placePt.yw, z: sZ },
+        home
+    ];
+    
+    const points2D = [];
+    for (const p of path) {
+        const uv = await convertWorldToImage(p.x, p.y, p.z);
+        if (uv) {
+            points2D.push(uv);
+        } else {
+            // Fallback: use known image coords for Pick/Place locations
+            // This ignores Z visual difference if tool is missing, but keeps lines connected
+            if (p.x === pickPt.xw && p.y === pickPt.yw) {
+                points2D.push({ u: pickPt.u, v: pickPt.v });
+            } else if (p.x === placePt.xw && p.y === placePt.yw) {
+                points2D.push({ u: placePt.u, v: placePt.v });
+            }
+            // Skip Home if conversion fails
+        }
+    }
+    ppTrajectoryPoints = points2D;
   }
 
   function handleImageClick(event: MouseEvent & { currentTarget: HTMLImageElement }) {
@@ -664,8 +749,8 @@
             method: 'POST',
             body: JSON.stringify({
                 type: 'call_tool',
-                name: 'convert_image_coords_to_world',
-                arguments: { u, v }
+                name: 'convert_coordinates',
+                arguments: { x: u, y: v, source: 'pixel', target: 'marker' }
             }),
             headers: { 'Content-Type': 'application/json' }
         });
@@ -677,10 +762,33 @@
                     try {
                         const coords = JSON.parse(content.text);
                         if (typeof coords.x === 'number') {
+                            // Get World Coordinates from Marker Coordinates
+                            let worldCoords = { x: coords.x, y: coords.y };
+                            try {
+                                const resWorld = await fetch('/mcp', {
+                                    method: 'POST',
+                                    body: JSON.stringify({
+                                        type: 'call_tool',
+                                        name: 'convert_coordinates',
+                                        arguments: { x: coords.x, y: coords.y, z: coords.z || 0, source: 'marker', target: 'world' }
+                                    }),
+                                    headers: { 'Content-Type': 'application/json' }
+                                });
+                                const resultWorld = await resWorld.json();
+                                if (resultWorld.content) {
+                                    for (const c of resultWorld.content) {
+                                        if (c.type === 'text') {
+                                            const wc = JSON.parse(c.text);
+                                            if (typeof wc.x === 'number') worldCoords = wc;
+                                        }
+                                    }
+                                }
+                            } catch (e) { console.error("Failed to convert to world coords", e); }
+
                             const pt = { 
                                 u, v, 
-                                x: coords.x, y: coords.y, 
-                                xw: coords.xw, yw: coords.yw,
+                                x: coords.x, y: coords.y, // Marker coords
+                                xw: worldCoords.x, yw: worldCoords.y, // World coords
                                 u_norm, v_norm
                             };
                             
@@ -691,7 +799,6 @@
                             } else {
                                 ppPickPoint = pt;
                                 ppPlacePoint = null;
-                                clearServerPoints();
                             }
                             return;
                         }
@@ -705,47 +812,6 @@
     } catch (e: any) {
         console.error('PP Conversion failed:', e);
         alert(`Error: ${e.message}`);
-    }
-  }
-
-  async function updateServerPoints() {
-    if (!ppPickPoint || !ppPlacePoint) return;
-    try {
-      await fetch('/mcp', {
-        method: 'POST',
-        body: JSON.stringify({
-          type: 'call_tool',
-          name: 'set_pick_place_points',
-          arguments: {
-            pick_x: ppPickPoint.x,
-            pick_y: ppPickPoint.y,
-            place_x: ppPlacePoint.x,
-            place_y: ppPlacePoint.y,
-            pick_z: ppPickZ,
-            place_z: ppPlaceZ,
-            safety_z: ppSafetyZ
-          }
-        }),
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (e) {
-      console.error('Failed to update server points:', e);
-    }
-  }
-
-  async function clearServerPoints() {
-    try {
-      await fetch('/mcp', {
-        method: 'POST',
-        body: JSON.stringify({
-          type: 'call_tool',
-          name: 'clear_pick_place_points',
-          arguments: {}
-        }),
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (e) {
-      console.error('Failed to clear server points:', e);
     }
   }
 
@@ -797,7 +863,6 @@
   function clearPPPoints() {
     ppPickPoint = null;
     ppPlacePoint = null;
-    clearServerPoints();
   }
 
   function toggleLive() {
@@ -1121,6 +1186,10 @@
               <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={ppShowDetections}>
               <label class="form-check-label" for="ppShowDetectionsSwitch">{t.show_detections}</label>
             </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch" id="ppShowTrajectorySwitch" bind:checked={ppShowTrajectory}>
+              <label class="form-check-label" for="ppShowTrajectorySwitch">{t.show_trajectory}</label>
+            </div>
             <div class="input-group input-group-sm" style="width: auto;">
                 <span class="input-group-text">{t.interval_ms}</span>
                 <input type="text" class="form-control" style="width: 60px;" bind:value={ppDetectionInterval} disabled={!ppShowDetections}>
@@ -1150,7 +1219,14 @@
             <div class="position-relative d-inline-block">
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-              <img src={ppImage} alt="Pick & Place View" class="img-fluid border rounded" style="max-height: 500px; cursor: crosshair;" onclick={handlePPImageClick} />
+              <img 
+                src={ppImage} 
+                alt="Pick & Place View" 
+                class="img-fluid border rounded" 
+                style="max-height: 500px; cursor: crosshair;" 
+                onclick={handlePPImageClick}
+                onload={(e) => { const img = e.currentTarget as HTMLImageElement; ppImageDim = { w: img.naturalWidth, h: img.naturalHeight }; }} 
+              />
               
               {#if ppShowDetections}
                 {#each ppDetections as obj}
@@ -1175,6 +1251,21 @@
                     <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}</span>
                   </div>
                 {/each}
+              {/if}
+
+              {#if ppShowTrajectory && ppTrajectoryPoints.length > 0 && ppImageDim}
+                <svg viewBox="0 0 {ppImageDim.w} {ppImageDim.h}" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
+                  <polyline 
+                    points={ppTrajectoryPoints.map(p => `${p.u},${p.v}`).join(' ')}
+                    fill="none"
+                    stroke="deeppink" 
+                    stroke-width="3" 
+                    stroke-dasharray="5,5"
+                  />
+                  {#each ppTrajectoryPoints as p}
+                    <circle cx="{p.u}" cy="{p.v}" r="3" fill="deeppink" />
+                  {/each}
+                </svg>
               {/if}
 
               {#if ppPickPoint}
@@ -1237,8 +1328,14 @@
         {#if error}
           <div class="alert alert-danger" role="alert">{t.error_tools}{error}</div>
         {:else if tools.length === 0}
-          <p>{t.loading_tools}</p>
+          <div class="d-flex align-items-center gap-2">
+            <p class="mb-0">{t.loading_tools}</p>
+            <button class="btn btn-sm btn-outline-primary" onclick={loadTools}>Refresh</button>
+          </div>
         {:else}
+          <div class="d-flex justify-content-end mb-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick={loadTools}>Refresh Tools</button>
+          </div>
           <div class="list-group">
             {#each tools as tool}
               <div class="list-group-item">
