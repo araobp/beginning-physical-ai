@@ -652,7 +652,7 @@ if __name__ == "__main__":
     parser.add_argument("--calib-gui", action="store_true", help="Launch Calibration GUI directly without starting the MCP server")
     parser.add_argument("--auto-gui", action="store_true", help="Automatically launch Vision GUI after starting the MCP server")
     parser.add_argument("--lang", type=str, default="ja", choices=["ja", "en"], help="Language (ja/en)")
-    parser.add_argument("--model", type=str, default="best.pt", help="Path to YOLO model file (default: best.pt)")
+    parser.add_argument("--model", type=str, default="best_20260208.pt", help="Path to YOLO model file (default: best.pt)")
     args = parser.parse_args()
 
     # グローバル設定の更新
