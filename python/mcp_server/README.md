@@ -18,3 +18,9 @@
 
 - [物体検出：ファインチューニングされたYOLO11nモデルのウエイト](best_20260208.pt)
 - [物体カタログ](workpieces.csv)
+
+## Helpメッセージ出力
+
+```
+$ python mcp_server --help
+```
