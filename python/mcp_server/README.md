@@ -22,5 +22,5 @@
 ## Helpメッセージ出力
 
 ```
-$ python mcp_server --help
+$ python mcp_server.py --help
 ```
