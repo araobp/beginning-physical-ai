@@ -48,6 +48,13 @@
 - [MCP Server](https://github.com/araobp/beginning-physical-ai/tree/main/python/mcp_server)
 - [MCP Client](https://github.com/araobp/beginning-physical-ai/tree/main/sveltekit/mcp_client)
 
+### VLA評価
+
+MCPサーバ、MCPクライアント、Gemini CLIを起動しVLAを評価する。
+```
+$ vla.sh
+```
+
 ## 部品・ツール
 
 ### 4DoFロボットアーム
