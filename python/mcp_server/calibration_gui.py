@@ -13,48 +13,57 @@ class CalibrationGUI:
         frame = tk.Frame(self.root, padx=20, pady=20)
         frame.pack()
 
-        # Calib 0 Section
-        tk.Label(frame, text="Calib 0 (cm)", font=('Arial', 12, 'bold')).grid(row=0, column=0, columnspan=2, pady=(0, 10))
+        # Coordinate System Selection
+        self.coord_mode = tk.StringVar(value="marker")
         
-        tk.Label(frame, text="X:").grid(row=1, column=0, sticky="e")
-        self.c0_x = tk.Entry(frame, width=10)
-        self.c0_x.grid(row=1, column=1)
+        tk.Label(frame, text="Input Coordinate System:", font=('Arial', 10, 'bold')).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        tk.Radiobutton(frame, text="ArUco Marker (Relative)", variable=self.coord_mode, value="marker").grid(row=1, column=0, columnspan=2, sticky="w")
+        tk.Radiobutton(frame, text="Robot Base (World)", variable=self.coord_mode, value="world").grid(row=2, column=0, columnspan=2, sticky="w")
         
-        tk.Label(frame, text="Y:").grid(row=2, column=0, sticky="e")
-        self.c0_y = tk.Entry(frame, width=10)
-        self.c0_y.grid(row=2, column=1)
-        
-        tk.Label(frame, text="Z:").grid(row=3, column=0, sticky="e")
-        self.c0_z = tk.Entry(frame, width=10)
-        self.c0_z.grid(row=3, column=1)
+        tk.Frame(frame, height=2, bd=1, relief=tk.SUNKEN).grid(row=3, column=0, columnspan=2, sticky="ew", pady=10)
 
-        tk.Button(frame, text="Send Calib 0", command=self.send_calib0).grid(row=4, column=0, columnspan=2, pady=10)
+        # Calib 0 Section
+        tk.Label(frame, text="Calib 0 (cm)", font=('Arial', 12, 'bold')).grid(row=4, column=0, columnspan=2, pady=(0, 10))
+        
+        tk.Label(frame, text="X:").grid(row=5, column=0, sticky="e")
+        self.c0_x = tk.Entry(frame, width=10)
+        self.c0_x.grid(row=5, column=1)
+        
+        tk.Label(frame, text="Y:").grid(row=6, column=0, sticky="e")
+        self.c0_y = tk.Entry(frame, width=10)
+        self.c0_y.grid(row=6, column=1)
+        
+        tk.Label(frame, text="Z:").grid(row=7, column=0, sticky="e")
+        self.c0_z = tk.Entry(frame, width=10)
+        self.c0_z.grid(row=7, column=1)
+
+        tk.Button(frame, text="Send Calib 0", command=self.send_calib0).grid(row=8, column=0, columnspan=2, pady=10)
 
         # Separator
-        tk.Frame(frame, height=2, bd=1, relief=tk.SUNKEN).grid(row=5, column=0, columnspan=2, sticky="ew", pady=10)
+        tk.Frame(frame, height=2, bd=1, relief=tk.SUNKEN).grid(row=9, column=0, columnspan=2, sticky="ew", pady=10)
 
         # Calib 1 Section
-        tk.Label(frame, text="Calib 1 (cm)", font=('Arial', 12, 'bold')).grid(row=6, column=0, columnspan=2, pady=(0, 10))
+        tk.Label(frame, text="Calib 1 (cm)", font=('Arial', 12, 'bold')).grid(row=10, column=0, columnspan=2, pady=(0, 10))
         
-        tk.Label(frame, text="X:").grid(row=7, column=0, sticky="e")
+        tk.Label(frame, text="X:").grid(row=11, column=0, sticky="e")
         self.c1_x = tk.Entry(frame, width=10)
-        self.c1_x.grid(row=7, column=1)
+        self.c1_x.grid(row=11, column=1)
         
-        tk.Label(frame, text="Y:").grid(row=8, column=0, sticky="e")
+        tk.Label(frame, text="Y:").grid(row=12, column=0, sticky="e")
         self.c1_y = tk.Entry(frame, width=10)
-        self.c1_y.grid(row=8, column=1)
+        self.c1_y.grid(row=12, column=1)
         
-        tk.Label(frame, text="Z:").grid(row=9, column=0, sticky="e")
+        tk.Label(frame, text="Z:").grid(row=13, column=0, sticky="e")
         self.c1_z = tk.Entry(frame, width=10)
-        self.c1_z.grid(row=9, column=1)
+        self.c1_z.grid(row=13, column=1)
 
-        tk.Button(frame, text="Send Calib 1", command=self.send_calib1).grid(row=10, column=0, columnspan=2, pady=10)
+        tk.Button(frame, text="Send Calib 1", command=self.send_calib1).grid(row=14, column=0, columnspan=2, pady=10)
 
         # Separator
-        tk.Frame(frame, height=2, bd=1, relief=tk.SUNKEN).grid(row=11, column=0, columnspan=2, sticky="ew", pady=10)
+        tk.Frame(frame, height=2, bd=1, relief=tk.SUNKEN).grid(row=15, column=0, columnspan=2, sticky="ew", pady=10)
 
         # Save Button
-        tk.Button(frame, text="Save Calibration", command=self.send_save, bg="#dddddd").grid(row=12, column=0, columnspan=2, pady=10)
+        tk.Button(frame, text="Save Calibration", command=self.send_save, bg="#dddddd").grid(row=16, column=0, columnspan=2, pady=10)
 
     def _get_coords_mm(self, entry_x, entry_y, entry_z):
         try:
@@ -62,10 +71,15 @@ class CalibrationGUI:
             y_mm = float(entry_y.get()) * 10.0
             z_mm = float(entry_z.get()) * 10.0
             
-            # Apply offsets (mm) to get world coordinates (x, y, z)
-            x_w_mm = x_mm + self.offset_x
-            y_w_mm = y_mm + self.offset_y
-            z_w_mm = z_mm # Assuming no Z offset
+            if self.coord_mode.get() == "marker":
+                # Apply offsets (mm) to get world coordinates (x, y, z)
+                x_w_mm = x_mm + self.offset_x
+                y_w_mm = y_mm + self.offset_y
+                z_w_mm = z_mm # Assuming no Z offset
+            else:
+                x_w_mm = x_mm
+                y_w_mm = y_mm
+                z_w_mm = z_mm
             
             # Already in mm for the robot controller
             return x_w_mm, y_w_mm, z_w_mm

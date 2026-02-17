@@ -13,8 +13,6 @@ import time
 import sys
 import csv
 import json
-import base64
-import cv2
 import re
 import queue
 import argparse
@@ -80,6 +78,7 @@ BAUD_RATE = 9600
 TIMEOUT = 45
 # 送信コマンドをコンソールに出力するかどうか
 VERBOSE_SERIAL = True
+QUIET_MODE = False
 
 # --- ビジョンシステム設定 ---
 # カメラキャリブレーションによって得られた内部パラメータファイル
@@ -129,11 +128,11 @@ def log_tool_call(tool_name, args, result):
         try:
             # JSONとしてパースして image_jpeg_base64 を省略
             data = json.loads(result)
-            if isinstance(data, dict) and "image_jpeg_base64" in data:
-                data["image_jpeg_base64"] = "(Base64 Image Data Truncated)"
+            if isinstance(data, dict):
+                if "image_jpeg_base64" in data:
+                    data["image_jpeg_base64"] = "(Base64 Image Data Truncated)"
                 log_result = json.dumps(data, ensure_ascii=False)
             else:
-                # その他の長い文字列は単純に切り詰め
                 log_result = result[:500] + "... (truncated)"
         except:
             log_result = result[:500] + "... (truncated)"
@@ -242,7 +241,8 @@ def get_vision_system():
                 robot_offset_y_mm=ROBOT_BASE_OFFSET_Y,
                 lang=LANG
             )
-            print("Vision system initialized successfully.")
+            if not QUIET_MODE:
+                print("Vision system initialized successfully.")
         except Exception as e:
             print(f"Failed to initialize VisionSystem: {e}")
             return None
@@ -253,9 +253,11 @@ def get_yolo_model():
     global _yolo_model
     if _yolo_model is None and YOLO is not None:
         try:
-            print(f"Loading YOLO model from {YOLO_MODEL_PATH}...")
+            if not QUIET_MODE:
+                print(f"Loading YOLO model from {YOLO_MODEL_PATH}...")
             _yolo_model = YOLO(YOLO_MODEL_PATH)
-            print("YOLO model loaded successfully.")
+            if not QUIET_MODE:
+                print("YOLO model loaded successfully.")
         except Exception as e:
             print(f"Failed to load YOLO model: {e}")
             return None
@@ -335,7 +337,7 @@ TOOL_DOCS = {
 
     [Important: Formula for Safe Path Planning]
     When moving horizontally with a workpiece, always raise the arm to the "Safety Height" calculated as:
-    Safety Height (Z) = gripping_height + 50.0 (Safety Margin)
+    Safety Height (Z) = gripping_height + 50.0 (Safety Margin), or "gripping height + destination object height + 20mm" for pick & place.
     """,
         'execute_sequence': """
     Sends a sequence of operations (command sequence) separated by semicolons ';' to the robot arm.
@@ -357,7 +359,7 @@ TOOL_DOCS = {
     [Rules for AI Controller]
     - **Open Gripper**: Always include 'grip open' somewhere in the sequence before gripping an object.
     - **Insert Delays**: Always insert 'delay t=1000' after 'grip close' or 'grip open'.
-    - **Use Safety Height**: Before horizontal movement, calculate safety height using `get_workpiece_catalog`.
+    - **Use Safety Height**: Before horizontal movement, calculate safety height using `get_workpiece_catalog` (e.g., Safety Height = gripping_height + 50.0, or "gripping height + destination object height + 20mm" for pick & place).
     - **Collision Avoidance**: Always raise to safety height before moving horizontally after gripping.
     - **Coordinate System**: Use the World Coordinate System values (x, y, z) exactly as returned by `get_live_image`. **DO NOT** subtract offsets or convert to marker coordinates manually.
     - **Strict Argument Compliance**: Do NOT send a 'description' argument. This tool only accepts 'commands'.
@@ -367,7 +369,7 @@ TOOL_DOCS = {
     Returns a string containing TCP coordinates in **World Coordinate System (mm)**, joint angles, and other status info.
     Use this to understand the arm's current position before planning movements.
     """,
-        'get_joypad_state': """
+        'get_joypad_status': """
     Retrieves the current input state of the joypad.
     Returns JSON: {'X': int, 'Y': int, 'RX': int, 'RY': int}
     X and Y correspond to the Left Stick; RX and RY correspond to the Right Stick.
@@ -451,7 +453,7 @@ TOOL_DOCS = {
     【AI管制官への絶対遵守ルール：経路計画】
     - **把持前の開放**: 物体を掴む前、シーケンスのどこかへ、必ず 'grip open' を入れてください。
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
-    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください (例: 安全高度 = gripping_height + 50.0)。また、物体検出により高さ(h)が推定されている場合は、その高さに十分なマージンを加えた値を安全高度として考慮してください。
+    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください。物体が検出されている場合は「gripping_height + プレイス先の物体の高さ + 20mm」、検出されていない場合は「80mm」としてください。また、物体検出により高さ(h)が推定されている場合は、その高さに十分なマージンを加えた値を安全高度として考慮してください。
     - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。低い高度のまま直線的に移動すると、他の物体と衝突する危険があります。
     - **座標系**: `get_live_image` で取得した世界座標 (x, y, z) をそのまま使用してください。**手動でオフセットを引いたり、マーカー座標系に変換したりしないでください。**
     - **引数の厳守**: 'description' などの定義されていない引数は送信しないでください。'commands' のみが有効です。
@@ -461,7 +463,7 @@ TOOL_DOCS = {
     **世界座標系（mm）**でのTCP座標、各関節の角度などが含まれる文字列を返します。
     動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。
     """,
-        'get_joypad_state': """
+        'get_joypad_status': """
     現在のジョイパッドの入力状態を取得します。
     戻り値 (JSON): {'X': int, 'Y': int, 'RX': int, 'RY': int}
     X, Yは左側のレバー、RX, RYは右側のレバーに対応します。
@@ -539,8 +541,8 @@ def get_robot_status(calling_client: str = 'gemini') -> str:
     return res
 
 @mcp.tool()
-@set_doc(DOCS['get_joypad_state'])
-def get_joypad_state(calling_client: str = 'gemini') -> str:
+@set_doc(DOCS['get_joypad_status'])
+def get_joypad_status(calling_client: str = 'gemini') -> str:
     return json.dumps(joypad_axis_values)
 
 @mcp.tool()
@@ -581,7 +583,7 @@ def get_live_image(visualize_axes: bool = False, detect_objects: bool = False, c
         resp["detections"] = detections
     
     if return_image:
-        base64_image = vs.get_undistorted_image_base64(draw_axes=visualize_axes) # クライアント側で描画するため、サーバーでは描画しない
+        base64_image = vs.get_undistorted_image_base64(draw_axes=visualize_axes)
         if base64_image:
             resp["image_jpeg_base64"] = base64_image
         elif not resp: # 画像も検出結果もない場合
@@ -663,59 +665,67 @@ JOYPAD_GAINS = {
 }
 
 SERVO_LIMITS = {
-    'c0': (500, 2500),
-    'c1': (500, 2500),
-    'c2': (1900, 2600),
+    'c0': (500, 2500), # Base
+    'c1': (500, 2500), # Shoulder
+    'c2': (1900, 2600), # Elbow
     'c3': (2250, 2700), # Gripper
 }
 
 def joypad_control_loop():
     """ジョイパッド入力に基づくサーボ制御ループ"""
-    # 接続確立と初期値同期のために少し待機
-    time.sleep(3)
-    print("Syncing servo positions from robot...")
-    
-    # 現状のステータスを取得
-    status = send_command("dump")
-    print(f"Initial Robot Status: {status}")
-    
-    # ステータスから現在のパルス幅を読み取って同期
-    for cmd in servo_pulse_widths.keys():
-        match = re.search(rf"{cmd}[=:\s]+(\d+)", status)
-        if match:
-            try:
-                servo_pulse_widths[cmd] = float(match.group(1))
-                print(f"Synced {cmd} -> {servo_pulse_widths[cmd]}")
-            except ValueError:
-                pass
+    try:
+        # 接続確立と初期値同期のために少し待機
+        time.sleep(3)
+        if not QUIET_MODE:
+            print("Syncing servo positions from robot...")
+        
+        # 現状のステータスを取得
+        status = send_command("dump")
+        if not QUIET_MODE:
+            print(f"Initial Robot Status: {status}")
+        
+        # ロボットから正常なステータスが返ってきた場合のみ同期
+        if status and "Error" not in status:
+            for cmd in servo_pulse_widths.keys():
+                match = re.search(rf"{cmd}[=:\s]+(\d+)", status)
+                if match:
+                    try:
+                        servo_pulse_widths[cmd] = float(match.group(1))
+                        if not QUIET_MODE:
+                            print(f"Synced {cmd} -> {servo_pulse_widths[cmd]}")
+                    except ValueError:
+                        pass
 
-    while True:
-        # 軸とコマンドのマッピング
-        # X -> c0, Y -> c2, RX -> c3, RY -> c1
-        mappings = [('X', 'c0'), ('Y', 'c2'), ('RX', 'c3'), ('RY', 'c1')]
-        
-        for axis, cmd in mappings:
-            val = joypad_axis_values.get(axis, 0)
-            if abs(val) > 5: # Deadzone
-                # パルス幅の更新 (入力値 -128~127 に応じて増減)
-                # ゲイン調整
-                delta = val * JOYPAD_GAINS.get(cmd, 0.05)
-                if cmd in ['c0', 'c1', 'c2']:
-                    servo_pulse_widths[cmd] -= delta
-                else:
-                    servo_pulse_widths[cmd] += delta
-                
-                # リミット適用
-                min_val, max_val = SERVO_LIMITS.get(cmd, (500, 2500))
-                servo_pulse_widths[cmd] = max(min_val, min(max_val, servo_pulse_widths[cmd]))
-                
-                # コマンド送信
-                send_command(f"{cmd}={int(servo_pulse_widths[cmd])}")
-        
-        time.sleep(0.02) # 50Hz
+        while True:
+            # 軸とコマンドのマッピング
+            # X -> c0 (Base), Y -> c2 (Elbow), RX -> c3 (Gripper), RY -> c1 (Shoulder)
+            mappings = [('X', 'c0'), ('Y', 'c2'), ('RX', 'c3'), ('RY', 'c1')]
+            
+            for axis, cmd in mappings:
+                val = joypad_axis_values.get(axis, 0)
+                if abs(val) > 5: # Deadzone
+                    delta = val * JOYPAD_GAINS.get(cmd, 0.05)
+                    if cmd in ['c0', 'c1', 'c2']:
+                        servo_pulse_widths[cmd] -= delta
+                    else:
+                        servo_pulse_widths[cmd] += delta
+                    
+                    min_val, max_val = SERVO_LIMITS.get(cmd, (500, 2500))
+                    servo_pulse_widths[cmd] = max(min_val, min(max_val, servo_pulse_widths[cmd]))
+                    
+                    send_command(f"{cmd}={int(servo_pulse_widths[cmd])}")
+            
+            time.sleep(0.02) # 50Hz
+    except Exception as e:
+        print(f"FATAL ERROR in joypad_control_loop thread: {e}", file=sys.stderr)
 
 # --- MJPEGストリーミングサーバー ---
 class StreamingHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        if QUIET_MODE:
+            return
+        super().log_message(format, *args)
+
     def do_GET(self):
         if self.path.startswith('/stream.mjpg'):
             self.send_response(200)
@@ -754,10 +764,14 @@ if __name__ == "__main__":
     parser.add_argument("--auto-gui", action="store_true", help="Automatically launch Vision GUI after starting the MCP server")
     parser.add_argument("--lang", type=str, default="ja", choices=["ja", "en"], help="Language (ja/en)")
     parser.add_argument("--model", type=str, default="best_20260208.pt", help="Path to YOLO model file (default: best.pt)")
+    parser.add_argument("--quiet", action="store_true", help="Suppress HTTP access logs")
     args = parser.parse_args()
 
     # グローバル設定の更新
     YOLO_MODEL_PATH = args.model
+    if args.quiet:
+        QUIET_MODE = True
+        VERBOSE_SERIAL = False
 
     # --- ジョイパッドサブシステムの起動 ---
     if get_joypad_system:
@@ -800,7 +814,8 @@ if __name__ == "__main__":
         # (macOSなどではOpenCVのGUI操作はメインスレッドで行う必要があるため)
         def run_server():
             try:
-                mcp.run(transport="streamable-http", host="0.0.0.0", port=8888)
+                log_level = "warning" if args.quiet else "info"
+                mcp.run(transport="streamable-http", host="0.0.0.0", port=8888, log_level=log_level)
             except Exception as e:
                 print(f"Server error: {e}")
 

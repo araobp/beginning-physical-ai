@@ -56,7 +56,7 @@
   let geminiLive = $state(false);
   let geminiLogs = $state<any[]>([]);
   let geminiDetections = $state<any[]>([]);
-  let geminiTrajectoryPoints = $state<{u: number, v: number}[]>([]);
+  let geminiTrajectoryPoints = $state<any[]>([]);
   let geminiImageDim = $state<{w: number, h: number} | null>(null);
 
   let ppDetectionTimeout: any = null;
@@ -1045,15 +1045,24 @@
   }
 
   async function parseGeminiVisuals(logs: any[]) {
-      // Find latest detection
-      const detectLog = logs.find((l: any) => l.tool === 'get_live_image' && l.args?.detect_objects);
-      if (detectLog && detectLog.result) {
-          try {
-              const res = JSON.parse(detectLog.result);
-              if (res.detections) {
-                  geminiDetections = res.detections;
+      // 1. Detections: Only show if the LATEST log is get_live_image with detections
+      const latestLog = logs.length > 0 ? logs[0] : null;
+      
+      if (latestLog && latestLog.tool === 'get_live_image' && latestLog.args?.detect_objects) {
+          if (latestLog.result) {
+              try {
+                  const res = JSON.parse(latestLog.result);
+                  if (res.detections) {
+                      geminiDetections = res.detections;
+                  } else {
+                      geminiDetections = [];
+                  }
+              } catch (e) {
+                  geminiDetections = [];
               }
-          } catch (e) {}
+          }
+      } else {
+          geminiDetections = [];
       }
 
       // Find latest movement sequence
@@ -1062,32 +1071,54 @@
           const cmds = moveLog.args.commands.split(';');
           const points3D = [];
           
+          // Add Home position at start (TCP initial position)
+          const home = { x: 110, y: 0, z: 70, type: 'home' };
+          points3D.push(home);
+          
           // Simple parser for "move x=... y=... z=..."
           for (const cmd of cmds) {
               const c = cmd.trim();
-              if (c.startsWith('move')) {
-                  const xMatch = c.match(/x=([-+]?\d*\.?\d+)/);
-                  const yMatch = c.match(/y=([-+]?\d*\.?\d+)/);
-                  const zMatch = c.match(/z=([-+]?\d*\.?\d+)/);
+              if (c.toLowerCase().startsWith('move')) {
+                  const xMatch = c.match(/x\s*=\s*([-+]?\d*\.?\d+)/i);
+                  const yMatch = c.match(/y\s*=\s*([-+]?\d*\.?\d+)/i);
+                  const zMatch = c.match(/z\s*=\s*([-+]?\d*\.?\d+)/i);
                   
                   if (xMatch && yMatch && zMatch) {
                       points3D.push({
                           x: parseFloat(xMatch[1]),
                           y: parseFloat(yMatch[1]),
-                          z: parseFloat(zMatch[1])
+                          z: parseFloat(zMatch[1]),
+                          type: 'waypoint'
                       });
                   }
               }
           }
           
+          // Add Home position at end (Return to initial position)
+          points3D.push({ ...home, type: 'home' });
+          
+          console.log("Parsed 3D Points:", points3D);
           if (points3D.length > 0) {
               const points2D = [];
               for (const p of points3D) {
                   const uv = await convertWorldToImage(p.x, p.y, p.z);
-                  if (uv) points2D.push(uv);
+                  if (uv) {
+                      points2D.push({
+                          u: uv.u,
+                          v: uv.v,
+                          x: p.x,
+                          y: p.y,
+                          z: p.z,
+                          type: p.type
+                      });
+                  }
               }
               geminiTrajectoryPoints = points2D;
+          } else {
+              geminiTrajectoryPoints = [];
           }
+      } else {
+          geminiTrajectoryPoints = [];
       }
   }
 
@@ -1118,6 +1149,8 @@
   }
 
   onMount(() => {
+    let mounted = true;
+    let cleanupFn = () => {};
     const sse = new EventSource('/mcp');
     sse.onmessage = (e) => console.log("SSE:", e.data);
     
@@ -1143,34 +1176,46 @@
       document.head.appendChild(tfScript);
     })();
 
-    const joypadInterval = setInterval(async () => {
-      if (ppExecuting) return;
-      try {
-        const res = await fetch('/mcp', {
-          method: 'POST',
-          body: JSON.stringify({
-            type: 'call_tool',
-            name: 'get_joypad_state',
-            arguments: {}
-          }),
-          headers: { 'Content-Type': 'application/json' }
-        });
-        const result = await res.json();
-        if (result.content && Array.isArray(result.content)) {
-          const text = result.content.find((c: any) => c.type === 'text')?.text;
-          if (text) {
-            const state = JSON.parse(text);
-            const scale = 10 / 128; // UI scale factor
-            joypadLeft = { x: (state.X ?? 0) * scale, y: (state.Y ?? 0) * scale };
-            joypadRight = { x: (state.RX ?? 0) * scale, y: (state.RY ?? 0) * scale };
-          }
+    const joypadLoop = async () => {
+        if (!mounted) return;
+        let nextDelay = 100;
+        if (!ppExecuting) {
+            try {
+                const res = await fetch('/mcp', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        type: 'call_tool',
+                        name: 'get_joypad_status',
+                        arguments: {}
+                    }),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (res.ok) {
+                    const result = await res.json();
+                    if (result.content && Array.isArray(result.content)) {
+                        const text = result.content.find((c: any) => c.type === 'text')?.text;
+                        if (text) {
+                            const state = JSON.parse(text);
+                            const scale = 10 / 128; // UI scale factor
+                            joypadLeft = { x: (state.X ?? 0) * scale, y: (state.Y ?? 0) * scale };
+                            joypadRight = { x: (state.RX ?? 0) * scale, y: (state.RY ?? 0) * scale };
+                        }
+                    }
+                } else {
+                    nextDelay = 2000;
+                }
+            } catch (e) {
+                nextDelay = 2000;
+            }
         }
-      } catch (e) {}
-    }, 100);
+        if (mounted) setTimeout(joypadLoop, nextDelay);
+    };
+    joypadLoop();
 
     return () => {
+      mounted = false;
       sse.close();
-      clearInterval(joypadInterval);
+      cleanupFn();
     };
   });
 </script>
@@ -1526,6 +1571,19 @@
                                 <!-- Detections Overlay -->
                                 {#each geminiDetections as obj}
                                     {@const color = getColorForObject(obj)}
+                                    {#if obj.ground_center}
+                                        {@const groundContactX = obj.ground_center.u_norm / 10}
+                                        {@const groundContactY = obj.ground_center.v_norm / 10}
+                                        {#if obj.ground_center.u_top_norm !== undefined}
+                                            {@const topX = obj.ground_center.u_top_norm / 10}
+                                            {@const topY = obj.ground_center.v_top_norm / 10}
+                                            <svg style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;">
+                                                <line x1="{groundContactX}%" y1="{groundContactY}%" x2="{topX}%" y2="{topY}%" stroke="{color}" stroke-width="2" stroke-dasharray="4" />
+                                            </svg>
+                                            <div style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
+                                        {/if}
+                                        <div style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"></div>
+                                    {/if}
                                     <div style="position: absolute; left: {obj.box_2d[1]/10}%; top: {obj.box_2d[0]/10}%; width: {(obj.box_2d[3]-obj.box_2d[1])/10}%; height: {(obj.box_2d[2]-obj.box_2d[0])/10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;">
                                         <span style="background: {color}; color: {getTextColor(color)}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;">{obj.label}{obj.color_name ? ` (${obj.color_name})` : ''} ({obj.confidence.toFixed(2)})</span>
                                     </div>
@@ -1537,12 +1595,12 @@
                                         <polyline 
                                             points={geminiTrajectoryPoints.map(p => `${p.u},${p.v}`).join(' ')}
                                             fill="none"
-                                            stroke="lime" 
+                                            stroke="deeppink" 
                                             stroke-width="3" 
                                             stroke-dasharray="5,5"
                                         />
                                         {#each geminiTrajectoryPoints as p}
-                                            <circle cx="{p.u}" cy="{p.v}" r="4" fill="lime" />
+                                            <circle cx="{p.u}" cy="{p.v}" r="3" fill="deeppink" />
                                         {/each}
                                     </svg>
                                 {/if}

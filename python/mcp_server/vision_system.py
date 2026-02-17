@@ -134,9 +134,12 @@ class VisionSystem:
             self.rvec, self.tvec, self.R, self.camera_pos = None, None, None, None
             return False
 
-    def _draw_trajectory(self, frame):
+    def _draw_trajectory(self, frame, rvec=None, tvec=None):
         """Pick & Placeの軌道を描画する"""
-        if self.pick_point and self.place_point and self.rvec is not None and self.tvec is not None:
+        target_rvec = rvec if rvec is not None else self.rvec
+        target_tvec = tvec if tvec is not None else self.tvec
+
+        if self.pick_point and self.place_point and target_rvec is not None and target_tvec is not None:
              # Z heights (mm) - use instance attributes
              z_pick = self.pick_z
              z_place = self.place_z
@@ -150,7 +153,7 @@ class VisionSystem:
              ], dtype=np.float32)
              
              # 3D座標を2D画像座標に投影
-             points_2d, _ = cv2.projectPoints(points_3d, self.rvec, self.tvec, self.mtx, np.zeros((5, 1)))
+             points_2d, _ = cv2.projectPoints(points_3d, target_rvec, target_tvec, self.mtx, np.zeros((5, 1)))
              pts = points_2d.reshape(-1, 2).astype(int)
              
              # 線を描画
@@ -198,9 +201,6 @@ class VisionSystem:
             cv2.putText(undistorted_frame, 'Y', tuple(axis_points_2d[1].ravel().astype(int)), font, 0.7, (0, 255, 0), 2)
             cv2.putText(undistorted_frame, 'Z', tuple(axis_points_2d[2].ravel().astype(int)), font, 0.7, (255, 0, 0), 2)
 
-            # 軌道の描画
-            self._draw_trajectory(undistorted_frame)
-
         if display:
             if self.display_width:
                 h, w = undistorted_frame.shape[:2]
@@ -225,7 +225,6 @@ class VisionSystem:
             current_rvec = self.rvec.copy() if self.rvec is not None else None
             current_tvec = self.tvec.copy() if self.tvec is not None else None
             
-        
         # 軸の描画
         if current_rvec is not None and current_tvec is not None and draw_axes:
              length = self.marker_size_mm * 0.8
@@ -241,9 +240,6 @@ class VisionSystem:
              cv2.putText(frame, 'X', tuple(axis_points_2d[0].ravel().astype(int)), font, 0.7, (0, 0, 255), 2)
              cv2.putText(frame, 'Y', tuple(axis_points_2d[1].ravel().astype(int)), font, 0.7, (0, 255, 0), 2)
              cv2.putText(frame, 'Z', tuple(axis_points_2d[2].ravel().astype(int)), font, 0.7, (255, 0, 0), 2)
-             
-             # 軌道の描画
-             self._draw_trajectory(frame)
              
         _, buffer = cv2.imencode('.jpg', frame)
         return buffer.tobytes()
@@ -506,22 +502,38 @@ class VisionSystem:
 
     def _hsv_to_color_name(self, h, s, v):
         """HSV値から簡易的な色名を判定する"""
-        # 彩度(S)の閾値を上げて、グレー/白/黒の判定を優先する (緑被り対策)
-        if s < 90: 
-            if v < 60: return "black"
-            if v > 150: return "white"
+        # 彩度(S)と明度(V)に基づいて、白・黒・グレーを先に判定
+        # 明度が極端に低い場合は黒
+        if v < 65:
+            return "black"
+
+        # 彩度しきい値を色相によって動的に調整
+        # 白が青っぽく誤判定されるのを防ぐため、青色領域(90-125)では彩度しきい値を上げる
+        s_thresh = 55
+        if 90 <= h < 125:
+            s_thresh = 80
+
+        # 彩度が低い場合は白かグレー
+        if s < s_thresh:
+            if v > 190:
+                return "white"
             return "gray"
-        
-        if v < 60: return "black" # 低明度
 
         # 色相による判定 (OpenCV H: 0-179)
-        if h < 8 or h >= 175: return "red"
-        if h < 22: return "orange"
-        if h < 45: return "yellow" # 黄色の範囲を広げる
-        if h < 95: return "green"
-        if h < 130: return "blue"
-        if h < 145: return "purple"
-        if h < 170: return "pink"
+        if h < 10 or h >= 170:
+            return "red"
+        if h < 30:
+            return "orange"
+        if h < 50:
+            return "yellow"
+        if h < 75:
+            return "green"
+        if h < 130:
+            return "blue"
+        if h < 155:
+            return "purple"
+        if h < 170: # 170付近はマゼンタ・ピンク系
+            return "pink"
         return "unknown"
 
     def detect_objects(self, model, confidence=0.7):
@@ -841,6 +853,9 @@ class VisionSystem:
                 if self.static_rvec is not None and self.static_tvec is not None:
                     length = self.marker_size_mm * 0.8
                     cv2.drawFrameAxes(frame_to_show, self.mtx, np.zeros((5, 1)), self.static_rvec, self.static_tvec, length)
+                    
+                    # 軌道の描画 (サーバー側GUIには表示する)
+                    self._draw_trajectory(frame_to_show, rvec=self.static_rvec, tvec=self.static_tvec)
                 
                 # Pick & Place ポイントの描画
                 for pt, color, label_key in [(self.pick_point, (128, 0, 128), "pick"), (self.place_point, (128, 0, 0), "place")]:
