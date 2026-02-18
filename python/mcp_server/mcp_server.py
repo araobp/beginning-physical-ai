@@ -48,6 +48,9 @@ if '--lang' in sys.argv:
         pass
 
 # --- 基本設定 ---
+VERBOSE_SERIAL = True
+QUIET_MODE = False
+
 # ロボットアーム（Arduino）が接続されているシリアルポート
 def detect_serial_port():
     """
@@ -59,8 +62,9 @@ def detect_serial_port():
     usb_ports = [p for p in ports if any(k in p for k in ['usbmodem', 'ttyACM', 'ttyUSB', 'COM'])]
     
     if not usb_ports:
-        fallback_port = '/dev/cu.usbmodem101'
-        print(f"Warning: No USB serial ports detected. Using default fallback: {fallback_port}")
+        fallback_port = '/dev/cu.usbmodem101' if sys.platform == 'darwin' else '/dev/ttyACM0'
+        if not QUIET_MODE:
+            print(f"Warning: No USB serial ports detected. Using default fallback: {fallback_port}")
         return fallback_port
     
     # 自然順ソート (例: COM3 < COM10)
@@ -68,7 +72,8 @@ def detect_serial_port():
         return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
     
     usb_ports.sort(key=natural_keys)
-    print(f"Auto-detected serial port: {usb_ports[0]} (from {usb_ports})")
+    if not QUIET_MODE:
+        print(f"Auto-detected serial port: {usb_ports[0]} (from {usb_ports})")
     return usb_ports[0]
 
 SERIAL_PORT = detect_serial_port()
@@ -76,13 +81,10 @@ SERIAL_PORT = detect_serial_port()
 BAUD_RATE = 9600
 # コマンド応答のタイムアウト（秒）
 TIMEOUT = 45
-# 送信コマンドをコンソールに出力するかどうか
-VERBOSE_SERIAL = True
-QUIET_MODE = False
 
 # --- ビジョンシステム設定 ---
 # カメラキャリブレーションによって得られた内部パラメータファイル
-CAMERA_PARAMS_PATH = '../vision/chessboard/calibration_data.npz'
+CAMERA_PARAMS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../vision/chessboard/calibration_data.npz')
 # 座標系の原点として使用するArUcoマーカーのID
 ARUCO_MARKER_ID = 14
 # ArUcoマーカーの物理的な一辺の長さ (mm)
@@ -362,7 +364,6 @@ TOOL_DOCS = {
     - **Use Safety Height**: Before horizontal movement, calculate safety height using `get_workpiece_catalog` (e.g., Safety Height = gripping_height + 50.0, or "gripping height + destination object height + 20mm" for pick & place).
     - **Collision Avoidance**: Always raise to safety height before moving horizontally after gripping.
     - **Coordinate System**: Use the World Coordinate System values (x, y, z) exactly as returned by `get_live_image`. **DO NOT** subtract offsets or convert to marker coordinates manually.
-    - **Strict Argument Compliance**: Do NOT send a 'description' argument. This tool only accepts 'commands'.
     """,
         'get_robot_status': """
     Retrieves the current status of the robot arm.
@@ -453,10 +454,11 @@ TOOL_DOCS = {
     【AI管制官への絶対遵守ルール：経路計画】
     - **把持前の開放**: 物体を掴む前、シーケンスのどこかへ、必ず 'grip open' を入れてください。
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
-    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください。物体が検出されている場合は「gripping_height + プレイス先の物体の高さ + 20mm」、検出されていない場合は「80mm」としてください。また、物体検出により高さ(h)が推定されている場合は、その高さに十分なマージンを加えた値を安全高度として考慮してください。
-    - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。低い高度のまま直線的に移動すると、他の物体と衝突する危険があります。
+    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください。物体が検出されている場合は「gripping_height + プレイス先の物体の高さ + 30mm」、検出されていない場合は「80mm」としてください。また、物体検出により高さ(h)が推定されている場合は、その高さに十分なマージンを加えた値を安全高度として考慮してください。
+    - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。軌道の途中に他の物体がある場合、その物体の高さ(h)に安全マージン(30mm)と把持位置(gripping_height)を加えた高さ（h + gripping_height + 30mm）で上空を通過するか、あるいは物体の横幅を考慮して干渉しない経路で移動してください。
     - **座標系**: `get_live_image` で取得した世界座標 (x, y, z) をそのまま使用してください。**手動でオフセットを引いたり、マーカー座標系に変換したりしないでください。**
-    - **引数の厳守**: 'description' などの定義されていない引数は送信しないでください。'commands' のみが有効です。
+    - **リリース高度**: 物体を置く（リリースする）際のZ座標は、衝突を避けるための安全な高さに設定する必要があります。もしプレイス先に別の物体が存在する場合、その物体の高さ(h)に安全マージン(20mm)と把持位置(gripping_height)を加えた高さ（h + gripping_height + 20mm）でリリースしてください。リリース先に物体がない場合は、安全マージン(20mm)と把持位置(gripping_height)を加えた高さ（gripping_height + 20mm）でリリースしてください。
+    - **リリース後の退避**: 物体をリリースした後は、必ず初期位置である `{ x: 110, y: 0, z: 70 }` へ戻るコマンドを追加してください。
     """,
         'get_robot_status': """
     ロボットアームの現在の状態を取得します。
@@ -527,10 +529,10 @@ def get_workpiece_catalog(calling_client: str = 'gemini') -> str:
 
 @mcp.tool()
 @set_doc(DOCS['execute_sequence'])
-def execute_sequence(commands: str, calling_client: str = 'gemini') -> str:
+def execute_sequence(commands: str, description: str = "", calling_client: str = 'gemini') -> str:
     _update_trajectory_from_commands(commands)
     res = send_command(commands)
-    log_tool_call("execute_sequence", {"commands": commands, "calling_client": calling_client}, res)
+    log_tool_call("execute_sequence", {"commands": commands, "description": description, "calling_client": calling_client}, res)
     return res
 
 @mcp.tool()
@@ -769,6 +771,9 @@ if __name__ == "__main__":
 
     # グローバル設定の更新
     YOLO_MODEL_PATH = args.model
+    if not os.path.isabs(YOLO_MODEL_PATH):
+        YOLO_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), YOLO_MODEL_PATH)
+
     if args.quiet:
         QUIET_MODE = True
         VERBOSE_SERIAL = False

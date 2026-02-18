@@ -368,12 +368,9 @@ class VisionSystem:
         dist_cam_obj = np.linalg.norm(P_ground_edge - camera_pos)
         
         # 半径推定 (簡易版)
-        # 視野角補正 (画面端での伸び)
-        tan2_alpha = ((u_c - cx) / fx)**2 + ((v_c - cy) / fy)**2
-        cos_alpha = 1.0 / np.sqrt(1 + tan2_alpha)
-        
         # width_px は円筒の直径に相当するとみなす
-        r_est = (width_px * dist_cam_obj / (2 * fx)) * cos_alpha * 0.9 # 0.9は経験的補正
+        # 以前は cos_alpha * 0.9 の補正があったが、過小評価の原因となるため削除
+        r_est = (width_px * dist_cam_obj / (2 * fx))
         
         # 中心位置補正: P_ground_edge は「手前の縁」。ここから半径分だけ「奥」へずらす。
         vec_cam_to_pt = P_ground_edge - np.array([C_pos[0], C_pos[1], 0.0])
@@ -528,11 +525,11 @@ class VisionSystem:
             return "yellow"
         if h < 75:
             return "green"
-        if h < 130:
+        if h < 120:
             return "blue"
-        if h < 155:
+        if h < 145:
             return "purple"
-        if h < 170: # 170付近はマゼンタ・ピンク系
+        if h < 170:
             return "pink"
         return "unknown"
 

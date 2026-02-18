@@ -1235,7 +1235,7 @@
 <main class="container mt-3">
   <div>
     <h2>{t.title}</h2>
-    <ul class="nav nav-tabs mt-3" id="myTab" role="tablist">
+    <ul class="nav nav-tabs mt-3 flex-nowrap overflow-x-auto" id="myTab" role="tablist">
       <li class="nav-item" role="presentation">
         <button
           class="nav-link active"
@@ -1773,5 +1773,14 @@
         border-radius: 50%;
         background-color: #555;
         transition: transform 0.2s ease;
+    }
+
+    /* Hide scrollbar for tabs but allow scrolling */
+    .nav-tabs::-webkit-scrollbar {
+        display: none;
+    }
+    .nav-tabs {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
     }
 </style>
