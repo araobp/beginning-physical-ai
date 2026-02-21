@@ -332,14 +332,6 @@ TOOL_DOCS = {
     [Instructions for AI]
     When planning to manipulate objects (e.g., pick and place), **always execute this tool first** to understand the exact "gripping_height" to avoid collisions.
 
-    [Data Structure Details]
-    - name: Name of the workpiece.
-    - gripping_height: Gripping height of the workpiece (mm). This is the Z coordinate to which the arm should descend to grip the object. If this value is 0, the object is not intended for gripping.
-    - description: Supplementary information.
-
-    [Important: Formula for Safe Path Planning]
-    When moving horizontally with a workpiece, always raise the arm to the "Safety Height" calculated as:
-    Safety Height (Z) = gripping_height + 50.0 (Safety Margin), or "gripping height + destination object height + 20mm" for pick & place.
     """,
         'execute_sequence': """
     Sends a sequence of operations (command sequence) separated by semicolons ';' to the robot arm.
@@ -359,11 +351,14 @@ TOOL_DOCS = {
         description (str): Optional description of the sequence (ignored by the robot, but useful for logs).
 
     [Rules for AI Controller]
-    - **Open Gripper**: Always include 'grip open' somewhere in the sequence before gripping an object.
+    - **Open Gripper**: Always include 'grip open' immediately before descending to the gripping height.
+    - **Close Gripper after Release**: Always include 'grip close' after releasing the object.
     - **Insert Delays**: Always insert 'delay t=1000' after 'grip close' or 'grip open'.
-    - **Use Safety Height**: Before horizontal movement, calculate safety height using `get_workpiece_catalog` (e.g., Safety Height = gripping_height + 50.0, or "gripping height + destination object height + 20mm" for pick & place).
-    - **Collision Avoidance**: Always raise to safety height before moving horizontally after gripping.
+    - **Calculate and Use Safety Height**: Before horizontal movement, you must calculate the safety height. Use `get_live_image` to detect the height (`h`) of any objects at the destination. Use `get_workpiece_catalog` to find the `gripping_height` of the object to be picked. Calculate both "Pick Safety Height" (e.g., `gripping_height` + 30mm) and "Place Safety Height" (e.g., destination object height(`h`) + `gripping_height` + 30mm), then **use the higher of the two as the "Travel Safety Height"**.
+    - **Collision Avoidance**: After gripping a workpiece, always raise the arm to the "Travel Safety Height" before moving horizontally. Maintain this height while moving to a point above the destination.
     - **Coordinate System**: Use the World Coordinate System values (x, y, z) exactly as returned by `get_live_image`. **DO NOT** subtract offsets or convert to marker coordinates manually.
+    - **Release Height**: If there is an object at the place destination, release (grip open) directly above it (at the Travel Safety Height). If the place destination is a flat surface, descend to an appropriate height (e.g., gripping_height + 20mm) to release.
+    - **Retreat after Release**: After releasing the object, always add a command to slowly return to the initial position `{ x: 130, y: 0, z: 70 }` at speed `s=50`.
     """,
         'get_robot_status': """
     Retrieves the current status of the robot arm.
@@ -428,10 +423,6 @@ TOOL_DOCS = {
     【AIへの指示】
     ロボットアームで物体を操作する計画（ピック＆プレイスなど）を立てる際には、対象物の正確な「把持高さ(gripping_height)」を把握するため、**必ず最初にこのツールを実行してください。**
 
-    【データ構造の詳細】
-    - name: ワークの名称（日本語）
-    - gripping_height: ワークを把持する際のZ座標 (mm)。アームを下降させる際の目標高さとなります。この値が0の場合は、把持対象ではないことを意味します。
-    - description: ワークに関する補足情報。
     """,
         'execute_sequence': """
     ロボットアームに一連の動作（コマンドシーケンス）をセミコロン ';' 区切りで送信します。
@@ -452,13 +443,15 @@ TOOL_DOCS = {
         description (str): 動作の説明（ロボットには無視されますが、ログ記録に役立ちます）。
 
     【AI管制官への絶対遵守ルール：経路計画】
-    - **把持前の開放**: 物体を掴む前、シーケンスのどこかへ、必ず 'grip open' を入れてください。
+    - **距離と単位**: このツール群で扱う「距離」とは、すべて**世界座標系における物体間の物理的な距離**を指し、画像上のピクセル(uv)距離ではありません。すべての座標と距離の単位は**ミリメートル(mm)**です。
+    - **把持前の開放**: ピック動作において、把持高さへ下降する直前に、必ず 'grip open' を実行してください。
+    - **リリース後の閉鎖**: 物体をリリースした後には、必ず 'grip close' を実行してください。
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
-    - **安全高度の計算と利用**: 水平移動の前には、必ず `get_workpiece_catalog` を参照し、操作対象のワークに応じた安全高度を算出してください。物体が検出されている場合は「gripping_height + プレイス先の物体の高さ + 30mm」、検出されていない場合は「80mm」としてください。また、物体検出により高さ(h)が推定されている場合は、その高さに十分なマージンを加えた値を安全高度として考慮してください。
-    - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「安全高度」までアームを上昇させてから行ってください。軌道の途中に他の物体がある場合、その物体の高さ(h)に安全マージン(30mm)と把持位置(gripping_height)を加えた高さ（h + gripping_height + 30mm）で上空を通過するか、あるいは物体の横幅を考慮して干渉しない経路で移動してください。
+    - **安全高度の計算と利用**: 水平移動の前には、必ず安全高度を算出してください。プレイス先に物体がある場合、その物体の高さ(`h`)は `get_live_image` を使って検出します。把持する物体の `gripping_height` は `get_workpiece_catalog` で確認します。「ピック地点の安全高度（例: `gripping_height` + 30mm）」と「プレイス地点の安全高度（例: プレイス先の物体の高さ(`h`) + `gripping_height` + 30mm）」の両方を計算し、**より高い方を「移動安全高度」として採用してください**。
+    - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「移動安全高度」までアームを上昇させてから行ってください。その高さを維持したままプレイス地点の上空へ水平移動してください。
     - **座標系**: `get_live_image` で取得した世界座標 (x, y, z) をそのまま使用してください。**手動でオフセットを引いたり、マーカー座標系に変換したりしないでください。**
-    - **リリース高度**: 物体を置く（リリースする）際のZ座標は、衝突を避けるための安全な高さに設定する必要があります。もしプレイス先に別の物体が存在する場合、その物体の高さ(h)に安全マージン(20mm)と把持位置(gripping_height)を加えた高さ（h + gripping_height + 20mm）でリリースしてください。リリース先に物体がない場合は、安全マージン(20mm)と把持位置(gripping_height)を加えた高さ（gripping_height + 20mm）でリリースしてください。
-    - **リリース後の退避**: 物体をリリースした後は、必ず初期位置である `{ x: 110, y: 0, z: 70 }` へ戻るコマンドを追加してください。
+    - **リリース高度**: プレイス先に物体がある場合は、その上空（移動安全高度）でそのままリリース（grip open）を行ってください。プレイス先が平坦な場所であれば、適切な高さ（例: 把持高さ + 20mm）まで下降してリリースしてください。
+    - **リリース後の退避**: 物体をリリースした後は、必ず初期位置である `{ x: 130, y: 0, z: 70 }` へ、速度 `s=50` でゆっくりと戻るコマンドを追加してください。
     """,
         'get_robot_status': """
     ロボットアームの現在の状態を取得します。

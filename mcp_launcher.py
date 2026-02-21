@@ -12,6 +12,7 @@ from collections import deque
 # --- Configuration ---
 PYTHON_CMD = "python3" if sys.platform == "darwin" else "python"
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+MCP_SERVER_LANG = "ja" # Default language, will be set by user prompt
 
 PROCESSES = [
     {
@@ -98,9 +99,15 @@ def start_process(proc_info):
     try:
         proc_info["log"].clear()
         proc_info["log"].append(f"Starting {proc_info['name']}...")
+
+        cmd_to_run = list(proc_info["cmd"]) # Make a copy to modify
+        if proc_info["name"] == "MCP Server":
+            cmd_to_run.extend(["--lang", MCP_SERVER_LANG])
+            proc_info["log"].append(f"Starting with language: {MCP_SERVER_LANG}")
+
         # Use preexec_fn=os.setsid to create a new process group
         proc_info["process"] = subprocess.Popen(
-            proc_info["cmd"],
+            cmd_to_run,
             cwd=proc_info["cwd"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -314,6 +321,16 @@ if __name__ == "__main__":
         print("Error: 'psutil' library is required.")
         print("Please install it using: pip install psutil")
         sys.exit(1)
+
+    # --- Language Selection ---
+    print("起動するMCPサーバーの言語を選択してください。 (Please select a language for MCP Server.)")
+    print("  1) 日本語 (Japanese)")
+    print("  2) 英語 (English)")
+    print("")
+    choice = input("番号を入力してください (Enter number) [1]: ").strip()
+    if choice == "2":
+        MCP_SERVER_LANG = "en"
+    # Default is 'ja', which is already set
 
     try:
         curses.wrapper(main_tui)
