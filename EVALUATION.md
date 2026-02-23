@@ -48,7 +48,7 @@ Execute the previously developed plan, then verify the field status to determine
   ░░░░░░░░░  ░░░░░░░░░░ ░░░░░     ░░░░░ ░░░░░ ░░░░░    ░░░░░ ░░░░░
 
 
-Logged in with Google: shinya.arao@gmail.com /auth
+Logged in with Google: ********** /auth
 Plan: Gemini Code Assist for individuals
  > /mcp list
 Configured MCP servers:
