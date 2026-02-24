@@ -24,6 +24,7 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.25.3",
 		"@popperjs/core": "^2.11.8",
+		"@sveltejs/adapter-node": "^5.5.3",
 		"@tensorflow/tfjs": "^4.22.0",
 		"bootstrap": "^5.3.8",
 		"node-pty": "^1.1.0",

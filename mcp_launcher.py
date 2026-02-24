@@ -101,9 +101,13 @@ def start_process(proc_info):
         proc_info["log"].append(f"Starting {proc_info['name']}...")
 
         cmd_to_run = list(proc_info["cmd"]) # Make a copy to modify
+        env = os.environ.copy()
+
         if proc_info["name"] == "MCP Server":
             cmd_to_run.extend(["--lang", MCP_SERVER_LANG])
             proc_info["log"].append(f"Starting with language: {MCP_SERVER_LANG}")
+        elif proc_info["name"] == "MCP Client":
+            env["PUBLIC_MCP_LANGUAGE"] = MCP_SERVER_LANG
 
         # Use preexec_fn=os.setsid to create a new process group
         proc_info["process"] = subprocess.Popen(
@@ -112,6 +116,7 @@ def start_process(proc_info):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
+            env=env,
             text=True,
             encoding='utf-8',
             errors='replace',
@@ -231,6 +236,9 @@ def main_tui(stdscr):
     # Auto-start all processes
     for proc in PROCESSES:
         start_process(proc)
+        # Add a small delay after starting the server to give it time to initialize
+        if proc["name"] == "MCP Server":
+            time.sleep(3)
 
     while True:
         if time.time() - last_check_time > 1:
