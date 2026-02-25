@@ -4,12 +4,6 @@ import { GoogleGenAI } from "@google/genai";
  * Gemini Live APIとの通信を管理するための設定インターフェース。
  */
 export interface GeminiLiveConfig {
-    onConnect?: () => void;
-    onDisconnect?: () => void;
-    onError?: (error: any) => void;
-    onVolume?: (micLevel: number, speakerLevel: number) => void;
-    onModelResponse?: (text: string) => void;
-    onToolCall?: (name: string, args: any) => Promise<any>;
     onConnect?: () => void; // 接続確立時に呼び出されるコールバック
     onDisconnect?: () => void; // 切断時に呼び出されるコールバック
     onError?: (error: any) => void; // エラー発生時に呼び出されるコールバック
@@ -55,7 +49,6 @@ export class GeminiLiveClient {
         // ブラウザの自動再生ポリシーにより、ユーザー操作なしでの音声再生はブロックされるためです。
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         this.audioContext = new AudioContextClass({
-            sampleRate: 16000
             sampleRate: 16000 // Gemini Live APIは16kHzまたは24kHzを推奨
         });
         await this.audioContext.resume();
@@ -91,7 +84,6 @@ export class GeminiLiveClient {
             }
             const tokenData = await tokenRes.json();
             console.log("Token response data:", tokenData);
-            const ephemeralToken = tokenData.name;
             const ephemeralToken = tokenData.name; // トークン文字列ではなくリソース名が返る場合があるが、SDKが処理する
             console.log("Fetched ephemeral token: ", ephemeralToken);
 
