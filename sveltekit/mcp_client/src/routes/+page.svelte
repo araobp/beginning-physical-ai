@@ -87,13 +87,17 @@
     { source: "user" | "model" | "tool"; content: string }[]
   >([]);
   let geminiInterimTranscript = $state("");
+  let cliMonitorLoaded = $state(false);
+  let cliMonitorImageSrc = $state<string | null>(null);
+  let geminiLiveMonitorLoaded = $state(false);
+  let geminiLiveMonitorImageSrc = $state<string | null>(null);
 
   let conversationLogElement: HTMLElement | null = null;
 
   let isPollingLogs = false;
 
   // Theme settings
-  let currentTheme = $state("default"); // 'default' or 'hal9000'
+  let currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "default"); // 'default' or 'hal9000'
 
   $effect(() => {
     if (typeof window !== "undefined") {
@@ -178,6 +182,7 @@
       theme_hal9000: "宇宙船 (HAL 9000)",
       mjpeg_loading: "ストリームを読み込み中...",
       mjpeg_error: "ストリームが利用できません。",
+      gemini_live_conversation_header: "推論パス",
     },
     en: {
       title: "The Cheapest 4-DoF Robot Arm",
@@ -219,6 +224,7 @@
       theme_hal9000: "Spaceship (HAL 9000)",
       mjpeg_loading: "Loading stream...",
       mjpeg_error: "Stream unavailable.",
+      gemini_live_conversation_header: "Reasoning Path",
     },
   };
 
@@ -1273,16 +1279,40 @@
   function toggleCliMonitor() {
     cliMonitor = !cliMonitor;
     if (cliMonitor) {
+      cliMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
+      cliMonitorLoaded = false;
       if (!isPollingLogs) pollGeminiLogs();
     } else {
+      cliMonitorImageSrc = null;
       geminiDetections = [];
       geminiTrajectoryPoints = [];
     }
   }
 
+  function playConnectedSound() {
+    try {
+      const AudioContextClass =
+        window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    } catch (e) {}
+  }
+
   async function toggleGeminiLive() {
     geminiLive = !geminiLive;
     if (geminiLive) {
+      geminiLiveMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
+      geminiLiveMonitorLoaded = false;
       // Start Monitor
       geminiLiveLog = [];
       geminiInterimTranscript = "";
@@ -1294,6 +1324,7 @@
       geminiClient = new GeminiLiveClient({
         onConnect: () => {
           geminiStatus = "Connected";
+          playConnectedSound();
         },
         onDisconnect: () => {
           geminiStatus = "Disconnected";
@@ -1309,22 +1340,13 @@
           if (mic > 0) geminiMicLevel = mic;
           if (speaker > 0) geminiSpeakerLevel = speaker;
         },
-        onTranscript: (text, isFinal) => {
-          if (isFinal) {
-            geminiLiveLog = [
-              ...geminiLiveLog,
-              { source: "user", content: text },
-            ];
-            geminiInterimTranscript = "";
-          } else {
-            geminiInterimTranscript = text;
-          }
-        },
         onModelResponse: (text) => {
-          geminiLiveLog = [
-            ...geminiLiveLog,
-            { source: "model", content: text },
-          ];
+          const lastLog = geminiLiveLog[geminiLiveLog.length - 1];
+          if (lastLog && lastLog.source === "model") {
+            lastLog.content += text;
+          } else {
+            geminiLiveLog.push({ source: "model", content: text });
+          }
         },
         onToolCall: async (name, args) => {
           const toolLog = `Calling ${name}(${JSON.stringify(args)})`;
@@ -1362,6 +1384,7 @@
       });
       await geminiClient.connect(tools);
     } else {
+      geminiLiveMonitorImageSrc = null;
       geminiDetections = [];
       geminiTrajectoryPoints = [];
       if (geminiClient) geminiClient.disconnect();
@@ -1370,6 +1393,7 @@
 
   $effect(() => {
     geminiLiveLog;
+    geminiInterimTranscript;
     if (conversationLogElement) {
       // Scroll to bottom when geminiLiveLog changes
       conversationLogElement.scrollTop = conversationLogElement.scrollHeight;
@@ -2081,7 +2105,7 @@
         aria-labelledby="gemini-cli-tab"
         tabindex="0"
       >
-        <div class="container-fluid mt-3">
+        <div class="container-fluid mt-1 mb-1">
           <div class="row mb-3">
             <div class="col-12 d-flex align-items-center gap-3">
               <button
@@ -2099,16 +2123,19 @@
               <div class="card">
                 <div class="card-header">Live Monitor</div>
                 <div
-                  class="card-body text-center p-0 bg-dark position-relative"
-                  style={cliMonitor ? "" : "min-height: 400px;"}
+                  class="card-body text-center p-0 bg-dark position-relative d-flex align-items-center justify-content-center"
+                  style="height: 350px;"
                 >
                   {#if cliMonitor}
                     <img
-                      src={`http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`}
+                      src={cliMonitorImageSrc}
                       alt="Gemini Monitor View"
                       class="img-fluid"
-                      style="max-height: 440px;"
+                      class:monitor-turn-on={cliMonitorLoaded}
+                      class:opacity-0={!cliMonitorLoaded}
+                      style="max-height: 100%; max-width: 100%;"
                       onload={(e) => {
+                        cliMonitorLoaded = true;
                         const img = e.currentTarget as HTMLImageElement;
                         geminiImageDim = {
                           w: img.naturalWidth,
@@ -2188,7 +2215,8 @@
                     {/if}
                   {:else}
                     <div
-                      class="d-flex align-items-center justify-content-center h-100 text-white"
+                      class="d-flex align-items-center justify-content-center h-100 blink-subtle"
+                      style="color: #006600; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
                     >
                       <p>Offline</p>
                     </div>
@@ -2245,7 +2273,7 @@
         aria-labelledby="gemini-live-tab"
         tabindex="0"
       >
-        <div class="container-fluid">
+        <div class="container-fluid mt-1 mb-1">
           <div class="row mb-3">
             <div class="col-12 d-flex align-items-center gap-3">
               <button
@@ -2260,19 +2288,22 @@
           <div class="row">
             <!-- Left: Live Monitor (Copied from Gemini CLI) -->
             <div class="col-md-6 d-flex flex-column gap-3">
-              <div class="card">
+              <div class="card rounded-bottom-0">
                 <div class="card-header">Live Monitor</div>
                 <div
-                  class="card-body text-center p-0 bg-dark position-relative"
-                  style={geminiLive ? "" : "min-height: 350px;"}
+                  class="card-body text-center p-0 bg-dark position-relative d-flex align-items-center justify-content-center"
+                  style="height: 350px;"
                 >
                   {#if geminiLive}
                     <img
-                      src={`http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`}
+                      src={geminiLiveMonitorImageSrc}
                       alt="Gemini Monitor View"
                       class="img-fluid"
-                      style="max-height: 350px;"
+                      class:monitor-turn-on={geminiLiveMonitorLoaded}
+                      class:opacity-0={!geminiLiveMonitorLoaded}
+                      style="max-height: 100%; max-width: 100%;"
                       onload={(e) => {
+                        geminiLiveMonitorLoaded = true;
                         const img = e.currentTarget as HTMLImageElement;
                         geminiImageDim = {
                           w: img.naturalWidth,
@@ -2352,7 +2383,8 @@
                     {/if}
                   {:else}
                     <div
-                      class="d-flex align-items-center justify-content-center h-100 text-white"
+                      class="d-flex align-items-center justify-content-center h-100 blink-subtle"
+                      style="color: #006600; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
                     >
                       <p>Offline</p>
                     </div>
@@ -2367,7 +2399,9 @@
                         Status: <span
                           class={geminiStatus === "Connected"
                             ? "text-success"
-                            : "text-muted"}>{geminiStatus}</span
+                            : "text-muted"}
+                          style={geminiStatus === "Connected" && currentTheme === "hal9000" ? "color: #00ff00 !important; text-shadow: none;" : ""}
+                          >{geminiStatus}</span
                         >
                       </div>
                       <div class="audio-levels">
@@ -2403,23 +2437,25 @@
             </div>
             <!-- Right: Placeholder for Gemini Live controls -->
             <div class="col-md-6">
-              <div class="card h-100 d-flex flex-column">
-                <div class="card-header">Conversation</div>
-                <div class="card-body d-flex flex-column flex-grow-1" style="overflow: hidden;">
+              <div class="card h-100 d-flex flex-column" style="max-height: 600px;">
+                <div class="card-header">{t.gemini_live_conversation_header}</div>
+                <div
+                  class="card-body p-0 d-flex flex-column"
+                  style="overflow: hidden;"
+                >
                   {#if !geminiLive}
-                    <div class="mt-auto text-muted small">
+                    <div class="p-3 mt-auto text-muted small">
                       <p>
                         Press the "Live" button above the monitor to start voice
                         control.
                       </p>
                       <p>
-                        Try saying: "Pick up the red block and place it on the
-                        blue one."
+                        Try saying: "What do you see?"
                       </p>
                     </div>
                   {:else}
                     <div
-                      class="conversation-log flex-grow-1 overflow-auto border rounded p-2"
+                      class="conversation-log flex-grow-1 overflow-auto p-2"
                       style="min-height: 0;"
                       bind:this={conversationLogElement}
                     >
@@ -2913,6 +2949,7 @@
   :global(.theme-hal9000 .conversation-log) {
     background-color: #073642; /* Retro dark cyan */
     border-color: var(--hal-border) !important;
+    font-family: "Orbitron", "Courier New", Courier, monospace;
   }
   :global(.theme-hal9000 .log-entry) {
     border-bottom-color: #222;
@@ -2957,5 +2994,46 @@
   }
   :global(.theme-hal9000 .fill) {
     background: #00ff00;
+  }
+
+  /* Monitor Turn-on Effect */
+  @keyframes monitor-turn-on {
+    0% {
+      transform: scale(0.2, 0.002);
+      opacity: 0;
+      filter: brightness(0) contrast(2);
+    }
+    10% {
+      transform: scale(0.2, 0.002);
+      opacity: 1;
+      filter: brightness(5) contrast(2);
+    }
+    40% {
+      transform: scale(1, 0.002);
+      filter: brightness(5) contrast(2);
+    }
+    70% {
+      transform: scale(1, 1);
+      filter: brightness(1.5) contrast(1.2);
+    }
+    100% {
+      transform: scale(1, 1);
+      filter: brightness(1) contrast(1);
+    }
+  }
+
+  .monitor-turn-on {
+    animation: monitor-turn-on 0.4s cubic-bezier(0.23, 1, 0.32, 1) forwards;
+    transform-origin: center;
+  }
+
+  /* Subtle Blink Effect */
+  @keyframes blink-subtle {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .blink-subtle {
+    animation: blink-subtle 3s infinite ease-in-out;
   }
 </style>

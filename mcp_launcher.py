@@ -13,6 +13,7 @@ from collections import deque
 PYTHON_CMD = "python3" if sys.platform == "darwin" else "python"
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 MCP_SERVER_LANG = "ja" # Default language, will be set by user prompt
+MCP_CLIENT_THEME = "default" # Default theme
 
 PROCESSES = [
     {
@@ -108,6 +109,7 @@ def start_process(proc_info):
             proc_info["log"].append(f"Starting with language: {MCP_SERVER_LANG}")
         elif proc_info["name"] == "MCP Client":
             env["PUBLIC_MCP_LANGUAGE"] = MCP_SERVER_LANG
+            env["PUBLIC_MCP_THEME"] = MCP_CLIENT_THEME
 
         # Use preexec_fn=os.setsid to create a new process group
         proc_info["process"] = subprocess.Popen(
@@ -330,15 +332,22 @@ if __name__ == "__main__":
         print("Please install it using: pip install psutil")
         sys.exit(1)
 
-    # --- Language Selection ---
-    print("起動するMCPサーバーの言語を選択してください。 (Please select a language for MCP Server.)")
-    print("  1) 日本語 (Japanese)")
-    print("  2) 英語 (English)")
+    # --- Language & Theme Selection ---
+    print("起動設定を選択してください。 (Please select configuration.)")
+    print("  1) 日本語 (Japanese) - Default Theme")
+    print("  2) 日本語 (Japanese) - HAL 9000 Theme")
+    print("  3) 英語 (English) - Default Theme")
+    print("  4) 英語 (English) - HAL 9000 Theme")
     print("")
     choice = input("番号を入力してください (Enter number) [1]: ").strip()
+    
     if choice == "2":
+        MCP_CLIENT_THEME = "hal9000"
+    elif choice == "3":
         MCP_SERVER_LANG = "en"
-    # Default is 'ja', which is already set
+    elif choice == "4":
+        MCP_SERVER_LANG = "en"
+        MCP_CLIENT_THEME = "hal9000"
 
     try:
         curses.wrapper(main_tui)

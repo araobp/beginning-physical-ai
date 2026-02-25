@@ -1,16 +1,25 @@
+import { GoogleGenAI } from "@google/genai";
+
+/**
+ * Gemini Live APIとの通信を管理するための設定インターフェース。
+ */
 export interface GeminiLiveConfig {
     onConnect?: () => void;
     onDisconnect?: () => void;
     onError?: (error: any) => void;
     onVolume?: (micLevel: number, speakerLevel: number) => void;
-    onTranscript?: (text: string, isFinal: boolean) => void;
     onModelResponse?: (text: string) => void;
     onToolCall?: (name: string, args: any) => Promise<any>;
 }
 
+/**
+ * Gemini Live APIとのWebSocket通信、音声ストリーミング、およびメッセージ処理を管理するクライアントクラス。
+ * 音声の入出力、WebSocket接続の確立と維持、およびサーバーからのメッセージのハンドリングを行います。
+ */
 export class GeminiLiveClient {
     private config: GeminiLiveConfig;
-    private ws: WebSocket | null = null;
+    private client: GoogleGenAI | null = null;
+    private session: any = null;
     private audioContext: AudioContext | null = null;
     private mediaStream: MediaStream | null = null;
     private audioProcessor: AudioWorkletNode | null = null;
@@ -19,114 +28,119 @@ export class GeminiLiveClient {
     private volumeInterval: any = null;
     private nextStartTime: number = 0;
     private isConnected: boolean = false;
+    private audioSources: Set<AudioBufferSourceNode> = new Set();
 
     constructor(config: GeminiLiveConfig) {
         this.config = config;
     }
 
+    /**
+     * Gemini Live APIへの接続を開始します。
+     * AudioContextの初期化、WebSocket接続の確立、および音声ストリームの開始を行います。
+     *
+     * @param tools - 使用可能なツールの定義配列。
+     */
     async connect(tools: any[] = []) {
+        console.log("GeminiLiveClient: connect called with tools:", tools);
         if (this.isConnected) return;
 
         // Initialize AudioContext here to capture user gesture
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         this.audioContext = new AudioContextClass({
-            sampleRate: 24000
+            sampleRate: 16000
         });
         await this.audioContext.resume();
         console.log("AudioContext state:", this.audioContext.state);
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const url = `${protocol}//${window.location.host}/gemini-live`;
+        // ツール定義をセッション構成に変換
+        const toolDefinitions: any[] | undefined = tools.length > 0 ? [{
+            functionDeclarations: tools.map(tool => {
+                const { $schema, ...parameters } = tool.inputSchema;
+                return {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: parameters
+                };
+            })
+        }] : undefined;
+        console.log("Function declarations for tools:", toolDefinitions);
 
         try {
-            this.ws = new WebSocket(url);
+            // エフェメラルトークンを取得
+            const tokenRes = await fetch('/api/gemini-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tools: toolDefinitions })
+            });
+            if (!tokenRes.ok) {
+                const errText = await tokenRes.text();
+                throw new Error(`Failed to fetch ephemeral token: ${tokenRes.status} ${errText}`);
+            }
+            const tokenData = await tokenRes.json();
+            console.log("Token response data:", tokenData);
+            const ephemeralToken = tokenData.name;
+            console.log("Fetched ephemeral token: ", ephemeralToken);
+
+            this.client = new GoogleGenAI({
+                apiKey: ephemeralToken,
+                httpOptions: { apiVersion: "v1alpha" }
+            });
+
+            const session = await this.client.live.connect({
+                model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+                callbacks: {
+                    onopen: () => {
+                        console.log("Gemini Live WebSocket Connected");
+                        this.isConnected = true;
+                        this.config.onConnect?.();
+                        this.startAudioStream();
+                    },
+                    onmessage: (msg: any) => {
+                        this.handleMessage(msg);
+                    },
+                    onclose: () => {
+                        console.log("Gemini Live WebSocket Closed");
+                        this.disconnect();
+                    },
+                    onerror: (err: any) => {
+                        console.error("Gemini Live WebSocket Error:", err);
+                        this.config.onError?.(err);
+                    }
+                }
+            });
+
+            // @ts-ignore
+            this.session = session;
+
         } catch (e) {
+            console.error("Connection failed:", e);
             this.config.onError?.(e);
             this.audioContext.close();
             this.audioContext = null;
             return;
         }
-
-        this.ws.binaryType = 'blob';
-        this.ws.onopen = () => {
-            console.log("Gemini Live WebSocket Connected");
-            this.isConnected = true;
-            this.config.onConnect?.();
-            this.sendSetup(tools);
-            this.startAudioStream();
-        };
-
-        this.ws.onmessage = async (event) => {
-
-            const data = event.data;
-            if (data instanceof Blob) {
-                const text = await data.text();
-                try {
-                    const msg = JSON.parse(text);
-                    this.handleMessage(msg);
-                } catch (e) {
-                    console.error("Error parsing JSON message", e);
-                }
-            } else {
-                console.log("Received non-blob message:", data);
-                this.handleMessage(JSON.parse(data));
-            }
-        };
-
-        this.ws.onclose = () => {
-            console.log("Gemini Live WebSocket Closed");
-            this.disconnect();
-        };
-
-        this.ws.onerror = (error) => {
-            console.error("Gemini Live WebSocket Error:", error, this.ws);// WebSocketインスタンスの状態をログに出力
-            this.config.onError?.(error);
-            this.disconnect();
-        };
     }
 
+    /**
+     * Gemini Live APIとの接続を切断し、リソースを解放します。
+     */
     disconnect() {
-        if (!this.isConnected && !this.ws) return;
+        if (!this.isConnected && !this.session) return;
 
         this.isConnected = false;
         this.stopAudioStream();
 
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
+        if (this.session) {
+            this.session.close();
+            this.session = null;
         }
         this.config.onDisconnect?.();
     }
 
-    private sendSetup(tools: any[]) {
-        const functionDeclarations = tools.map(tool => ({
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.inputSchema
-        }));
-
-        const setupMsg = {
-            setup: {
-                model: "models/gemini-2.5-flash-native-audio-preview-12-2025",
-                generationConfig: {
-                    responseModalities: ["AUDIO"],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: {
-                                voiceName: "Charon"
-                            }
-                        }
-                    }
-                },
-                tools: functionDeclarations.length > 0 ? [{ functionDeclarations: functionDeclarations }] : undefined
-            }
-        };
-
-        if (this.ws) {
-            this.ws.send(JSON.stringify(setupMsg));
-        }
-    }
-
+    /**
+     * マイクからの音声ストリームを開始し、AudioWorkletを使用してPCMデータを処理します。
+     * 処理された音声データはWebSocketを通じてサーバーに送信されます。
+     */
     private async startAudioStream() {
         if (!this.audioContext) return;
         console.log("Starting audio stream...");
@@ -135,6 +149,7 @@ export class GeminiLiveClient {
         this.outputAnalyser = this.audioContext.createAnalyser();
         this.outputAnalyser.connect(this.audioContext.destination);
 
+        // マイクへのアクセスを要求
         try {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -145,7 +160,7 @@ export class GeminiLiveClient {
             return;
         }
 
-
+        // AudioWorkletモジュールを追加
         await this.audioContext.audioWorklet.addModule(
             "data:text/javascript;base64," + btoa(this.getAudioWorkletCode())
         );
@@ -153,24 +168,23 @@ export class GeminiLiveClient {
         const source = this.audioContext.createMediaStreamSource(this.mediaStream);
         this.audioProcessor = new AudioWorkletNode(this.audioContext, "pcm-processor");
 
+        // AudioWorkletからのメッセージ（PCMデータ）を処理
+        // WebSocketが接続されている場合、データを送信
         this.audioProcessor.port.onmessage = (event) => {
             const pcmData = event.data;
 
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            // @ts-ignore
+            if (this.session) {
                 const buffer = pcmData.buffer;
                 const base64 = this.arrayBufferToBase64(buffer);
 
-                const msg = {
-                    realtimeInput: {
-                        mediaChunks: [
-                            {
-                                mimeType: "audio/pcm;rate=24000",
-                                data: base64
-                            }
-                        ]
+                // @ts-ignore
+                this.session.sendRealtimeInput({
+                    media: {
+                        mimeType: "audio/pcm;rate=16000",
+                        data: base64
                     }
-                };
-                this.ws.send(JSON.stringify(msg));
+                });
             }
         };
 
@@ -178,8 +192,13 @@ export class GeminiLiveClient {
         source.connect(this.audioProcessor);
 
         this.startVolumeReporting();
+        // Workletをdestinationに接続してプロセスを維持（音声は出力しないが処理は回る）
+        this.audioProcessor.connect(this.audioContext.destination);
     }
 
+    /**
+     * 音声ストリームを停止し、関連するリソース（MediaStream, AudioContextなど）を解放します。
+     */
     private stopAudioStream() {
         this.stopVolumeReporting();
         if (this.mediaStream) {
@@ -198,6 +217,19 @@ export class GeminiLiveClient {
         this.outputAnalyser = null;
     }
 
+    private stopAudioPlayback() {
+        this.audioSources.forEach(source => {
+            try {
+                source.stop();
+            } catch (e) { }
+        });
+        this.audioSources.clear();
+        this.nextStartTime = 0;
+    }
+
+    /**
+     * 入力および出力の音量レベルを定期的に監視し、コールバックを通じて通知します。
+     */
     private startVolumeReporting() {
         if (this.volumeInterval) clearInterval(this.volumeInterval);
         this.volumeInterval = setInterval(() => {
@@ -221,11 +253,17 @@ export class GeminiLiveClient {
         }, 50);
     }
 
+    /**
+     * 音量レベルの監視を停止します。
+     */
     private stopVolumeReporting() {
         if (this.volumeInterval) clearInterval(this.volumeInterval);
         this.volumeInterval = null;
     }
 
+    /**
+     * AudioWorkletProcessorのコードを文字列として返します。
+     */
     private getAudioWorkletCode() {
         return `
             class PCMProcessor extends AudioWorkletProcessor {
@@ -264,6 +302,9 @@ export class GeminiLiveClient {
         `;
     }
 
+    /**
+     * ArrayBufferをBase64文字列に変換します。
+     */
     private arrayBufferToBase64(buffer: ArrayBuffer) {
         let binary = '';
         const bytes = new Uint8Array(buffer);
@@ -274,41 +315,34 @@ export class GeminiLiveClient {
         return window.btoa(binary);
     }
 
+    /**
+     * サーバーからのメッセージを処理し、適切なアクション（音声再生、テキスト表示、ツール呼び出しなど）を実行します。
+     */
     private handleMessage(msg: any) {
         console.log("GeminiLiveClient: handleMessage", msg);
         const serverContent = msg.serverContent;
+
         if (serverContent) {
-            console.log(
-                "GeminiLiveClient: handleMessage - serverContent.modelTurn:",
-                serverContent.modelTurn
-            );
+            if (serverContent.interrupted) {
+                console.log("Interrupted!");
+                this.stopAudioPlayback();
+            }
+
             const modelTurn = serverContent.modelTurn;
             if (modelTurn) {
                 const parts = modelTurn.parts;
                 for (const part of parts) {
-                    console.log(
-                        "GeminiLiveClient: handleMessage - part:",
-                        part
-                    );
+                    if (part.text) {
+                        console.log("Geminiのセリフ（文字起こし）:", part.text);
+                        if (this.config.onModelResponse) {
+                            this.config.onModelResponse(part.text);
+                        }
+                    }
 
                     const inlineData = part.inlineData;
-
-                    if (part.text && this.config.onModelResponse) {
-                        this.config.onModelResponse(part.text);
-                    }
-
-                    console.log(
-                        "GeminiLiveClient: handleMessage - part.inlineData:",
-                        part.inlineData
-                    );
-                    console.log("GeminiLiveClient: handleMessage - mime type check:", inlineData?.mimeType?.startsWith("audio/pcm"));
-
                     if (inlineData && inlineData.mimeType?.startsWith("audio/pcm")) {
-                        console.log("GeminiLiveClient: Calling playAudio from handleMessage");
-                        console.log("Received audio chunk, length:", inlineData.data.length);
-                        this.playAudio(part.inlineData.data);
+                        this.playAudio(inlineData.data);
                     }
-
                 }
             }
         } else if (msg.toolCall) {
@@ -316,6 +350,9 @@ export class GeminiLiveClient {
         }
     }
 
+    /**
+     * サーバーからのツール呼び出し要求を処理し、結果をサーバーに返送します。
+     */
     private async handleToolCall(toolCall: any) {
         const functionCalls = toolCall.functionCalls;
         const toolResponses = [];
@@ -339,14 +376,18 @@ export class GeminiLiveClient {
             });
         }
 
-        const responseMsg = {
-            toolResponse: {
+        // @ts-ignore
+        if (this.session) {
+            // @ts-ignore
+            this.session.sendToolResponse({
                 functionResponses: toolResponses
-            }
-        };
-        if (this.ws) this.ws.send(JSON.stringify(responseMsg));
+            });
+        }
     }
 
+    /**
+     * 受信したBase64形式の音声データをデコードし、再生します。
+     */
     private playAudio(base64Data: string) {
         if (!this.audioContext) return;
         console.log("playAudio: start");
@@ -355,6 +396,7 @@ export class GeminiLiveClient {
             this.audioContext.resume();
         }
 
+        // Base64データをデコードしてPCMデータに変換
         const binaryString = window.atob(base64Data);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
@@ -367,6 +409,7 @@ export class GeminiLiveClient {
             float32[i] = int16[i] / 32768.0;
         }
 
+        // AudioBufferを作成して再生
         const buffer = this.audioContext.createBuffer(1, float32.length, 24000);
         buffer.copyToChannel(float32, 0);
 
@@ -383,14 +426,18 @@ export class GeminiLiveClient {
             source.connect(this.audioContext.destination);
         }
 
-        const startTime = Math.max(this.audioContext.currentTime, this.nextStartTime);
-        source.start(startTime);
-        this.nextStartTime = startTime + buffer.duration;
         source.onended = () => {
-            console.log("playAudio: done");
+            this.audioSources.delete(source);
+        };
+
+        // 途切れのない再生のために時間を同期
+        if (this.nextStartTime < this.audioContext.currentTime) {
+            this.nextStartTime = this.audioContext.currentTime;
         }
-        source.addEventListener('error', (e) => {
-            console.error("playAudio: error", e);
-        });
+
+        source.start(this.nextStartTime);
+        this.nextStartTime += buffer.duration;
+
+        this.audioSources.add(source);
     }
 }
