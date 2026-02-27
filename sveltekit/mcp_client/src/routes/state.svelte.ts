@@ -172,7 +172,7 @@ export class AppState {
   isPollingLogs = false;
 
   // Settings
-  currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "default");
+  currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "spaceship");
   currentLang = $state<Lang>((env.PUBLIC_MCP_LANGUAGE as Lang) || "ja");
 
   t = $derived(translations[this.currentLang]);

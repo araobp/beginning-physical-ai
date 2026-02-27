@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { AppState } from "./state.svelte";
   import CameraTab from "./components/CameraTab.svelte";
-  // 他のタブコンポーネントも同様にインポート
   import ControlTab from "./components/ControlTab.svelte";
   import GeminiLiveTab from "./components/GeminiLiveTab.svelte";
   import GeminiCliTab from "./components/GeminiCliTab.svelte";
