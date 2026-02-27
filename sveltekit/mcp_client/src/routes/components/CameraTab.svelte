@@ -28,7 +28,7 @@
   <div class="mb-3 d-flex gap-2 align-items-center">
     <select class="form-select w-auto" bind:value={appState.detectionModel}>
       <option value="yolo11n">yolo11n</option>
-      <option value="tensorflow.js">tensorflow.js</option>
+      <option value="tensorflow.js">tensorflow.js</option> 
       <option value="gemini-2.5-flash">gemini-2.5-flash</option>
       <option value="gemini-robotics-er-1.5-preview">gemini-robotics-er-1.5-preview</option>
     </select>

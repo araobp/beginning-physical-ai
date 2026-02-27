@@ -636,6 +636,23 @@ export class AppState {
     this.ppPlacePoint = null;
   }
 
+  // Clear detections and related data
+  clearDetectionsAndTracking() {
+    this.detectedObjects = [];
+    this.targetMarker = null;
+    this.targetImageCoords = null;
+    this.targetWorldCoords = null;
+    this.ppDetections = [];
+    this.ppHoveredObject = null;
+    this.ppTrajectoryPoints = [];
+    this.geminiDetections = [];
+    this.geminiTrajectoryPoints = [];
+    this.geminiLogs = [];
+    this.geminiInterimTranscript = "";
+    this.cliMonitorImageSrc = null;
+    this.geminiLiveMonitorImageSrc = null;
+  }
+
   handlePPMouseMove(event: MouseEvent) {
     const target = event.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -659,12 +676,15 @@ export class AppState {
   async toggleLive() {
     this.ppLive = !this.ppLive;
     if (this.ppLive) {
+      this.clearDetectionsAndTracking();
       this.ppDetections = [];
       this.ppImage = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
     } else {
       this.ppImage = null;
-      this.ppDetections = [];
+      this.clearDetectionsAndTracking();
     }
+
+    
   }
 
   async pollDetections() {
@@ -985,7 +1005,7 @@ export class AppState {
     this.cliMonitor = !this.cliMonitor;
     if (this.cliMonitor) {
       this.cliMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
-      this.cliMonitorLoaded = false;
+      this.cliMonitorLoaded = false;      
     } else {
       this.cliMonitorImageSrc = null;
       this.geminiDetections = [];
@@ -1040,13 +1060,15 @@ export class AppState {
   async toggleGeminiLive() {
     this.geminiLive = !this.geminiLive;
     if (this.geminiLive) {
-      this.geminiLiveMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
+      this.clearDetectionsAndTracking();
       this.geminiLiveMonitorLoaded = false;
       this.geminiLiveLog = [];
       this.geminiInterimTranscript = "";
+      this.geminiLiveMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
+
       
       this.geminiClient = new GeminiLiveClient({
-        onConnect: () => { this.geminiStatus = "Connected"; this.playConnectedSound(); },
+        onConnect: () => { this.geminiStatus = "Connected"; this.playConnectedSound(); console.log('Gemini Status:', this.geminiStatus); this.geminiLiveMonitorLoaded = true; },
         onDisconnect: () => { this.geminiStatus = "Disconnected"; this.geminiMicLevel = 0; this.geminiSpeakerLevel = 0; },
         onError: (e) => { this.geminiStatus = `Error: ${e.message || e}`; if (this.geminiLive) this.toggleGeminiLive(); },
         onVolume: (mic, speaker) => { this.geminiMicLevel = mic; this.geminiSpeakerLevel = speaker; },
@@ -1093,9 +1115,7 @@ export class AppState {
       });
       await this.geminiClient.connect(this.tools);
     } else {
-        this.geminiLiveMonitorImageSrc = null;
-        this.geminiDetections = [];
-        this.geminiTrajectoryPoints = [];
+        this.clearDetectionsAndTracking();
         if (this.geminiClient) {
           this.geminiClient.disconnect();
           // Manually reset state to ensure UI consistency,
@@ -1107,4 +1127,6 @@ export class AppState {
         }
     }
   }
+
+  
 }

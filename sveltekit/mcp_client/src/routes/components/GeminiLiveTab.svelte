@@ -45,6 +45,7 @@
           style="height: 350px; overflow: hidden;"
         >
           {#if appState.geminiLive}
+
             <img
               src={appState.geminiLiveMonitorImageSrc}
               alt="Gemini Monitor View"
@@ -61,6 +62,15 @@
                 };
               }}
             />
+          {:else}
+            <div
+              class="d-flex align-items-center justify-content-center h-100 blink-subtle"
+              style="color: #00bb00; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
+            >
+              <p>Offline</p>
+            </div>
+          {/if}
+
 
             <!-- Detections Overlay -->
             {#each appState.geminiDetections as obj}
@@ -126,14 +136,6 @@
                 {/each}
               </svg>
             {/if}
-          {:else}
-            <div
-              class="d-flex align-items-center justify-content-center h-100 blink-subtle"
-              style="color: #00bb00; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
-            >
-              <p>Offline</p>
-            </div>
-          {/if}
         </div>
       </div>
       <div class="card special-bg">

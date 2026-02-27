@@ -25,7 +25,7 @@
         </button>
       </div>
       <div class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center">
-        <div class="form-check form-switch mb-0">
+        <div class="form-check form-switch mb-0" style="font-size: 0.9em;">
           <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={appState.ppShowDetections} />
           <label class="form-check-label" for="ppShowDetectionsSwitch">{appState.t.show_detections}</label>
         </div>
@@ -37,7 +37,7 @@
     </div>
     <div class="d-flex gap-2 flex-wrap justify-content-center">
       <div class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center">
-        <div class="form-check form-switch mb-0">
+        <div class="form-check form-switch mb-0" style="font-size: 0.9em;">
           <input class="form-check-input" type="checkbox" role="switch" id="ppShowTrajectorySwitch" bind:checked={appState.ppShowTrajectory} />
           <label class="form-check-label" for="ppShowTrajectorySwitch">{appState.t.show_trajectory}</label>
         </div>
@@ -137,7 +137,7 @@
   {/if}
 
   <!-- Joypad Visualization -->
-  <div class="d-flex flex-column align-items-center mt-1 mb-1 p-1 border rounded bg-light">
+  <div class="d-flex flex-column align-items-center mt-2 mb-2 p-1 border rounded bg-light">
     <div class="d-flex gap-4 justify-content-center">
       <div class="joypad-stick">
         <div class="stick-label">{appState.t.joypad_left}</div>
