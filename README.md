@@ -50,11 +50,13 @@
 - [MCP Server](https://github.com/araobp/beginning-physical-ai/tree/main/python/mcp_server)
 - [MCP Client](https://github.com/araobp/beginning-physical-ai/tree/main/sveltekit/mcp_client)
 
-### VLA評価
+### 評価
 
-MCPサーバ、MCPクライアント、Gemini CLIを起動しVLAを評価する。
+環境変数 "GEMINI_API_KEY" へキーを設定
+
+MCPサーバ、MCPクライアント、Gemini CLI、Gemini Liveによる「VLAもどき」の評価環境を起動
 ```
-$ vla.sh
+$ python mcp_launcher.py
 ```
 
 ## 部品・ツール
