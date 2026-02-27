@@ -64,6 +64,7 @@ def check_statuses():
     pids_running = {p.pid for p in psutil.process_iter(['pid'])}
     for proc_info in PROCESSES:
         # First, check if our managed process object is still alive
+        # 管理しているプロセスオブジェクトがまだ生きているか確認
         if proc_info["process"]:
             poll_ret = proc_info["process"].poll()
             if poll_ret is None:
@@ -77,6 +78,7 @@ def check_statuses():
                 proc_info["process"] = None # Clear handle
 
         # If not, search for a matching process by command line
+        # プロセスハンドルがない場合、コマンドライン引数で一致するプロセスを探す（再起動時など）
         found = False
         for p in psutil.process_iter(['pid', 'cmdline']):
             try:
@@ -112,6 +114,7 @@ def start_process(proc_info):
             env["PUBLIC_MCP_THEME"] = MCP_CLIENT_THEME
 
         # Use preexec_fn=os.setsid to create a new process group
+        # 新しいプロセスグループを作成して、シグナル送信時に子プロセスもまとめて終了できるようにする
         proc_info["process"] = subprocess.Popen(
             cmd_to_run,
             cwd=proc_info["cwd"],
@@ -141,6 +144,7 @@ def stop_process(proc_info):
     proc_info["log"].append(f"Stopping {proc_info['name']} (PID: {proc_info['pid']})...")
     try:
         # Kill the entire process group
+        # プロセスグループ全体にSIGTERMを送信
         if sys.platform != "win32":
             os.killpg(os.getpgid(proc_info["pid"]), 15) # SIGTERM
         else:
@@ -148,6 +152,7 @@ def stop_process(proc_info):
             psutil.Process(proc_info["pid"]).terminate()
 
         # Wait a bit for graceful shutdown
+        # 少し待ってから、まだ残っていれば強制終了 (SIGKILL)
         time.sleep(1)
         if psutil.pid_exists(proc_info["pid"]):
              if sys.platform != "win32":
@@ -174,6 +179,7 @@ def stop_all_processes():
 # --- Curses TUI ---
 
 def draw_main_window(stdscr, selected_row):
+    """Draw the main TUI window with status list and logs."""
     stdscr.clear()
     h, w = stdscr.getmaxyx()
 
@@ -226,6 +232,7 @@ def draw_main_window(stdscr, selected_row):
     status_win.refresh()
 
 def main_tui(stdscr):
+    """Main event loop for the Curses TUI."""
     curses.curs_set(0)
     stdscr.nodelay(1)
     curses.start_color()
@@ -236,6 +243,7 @@ def main_tui(stdscr):
     last_check_time = 0
     
     # Auto-start all processes
+    # 起動時にすべてのプロセスを自動開始
     for proc in PROCESSES:
         start_process(proc)
         # Add a small delay after starting the server to give it time to initialize
@@ -243,6 +251,7 @@ def main_tui(stdscr):
             time.sleep(3)
 
     while True:
+        # 定期的にプロセスのステータスを更新
         if time.time() - last_check_time > 1:
             check_statuses()
             last_check_time = time.time()
@@ -270,6 +279,7 @@ def main_tui(stdscr):
             start_process(PROCESSES[selected_row])
         elif key == ord('g'):
             # --- Suspend curses and run interactive Gemini CLI ---
+            # Cursesモードを一時停止し、Gemini CLIをインタラクティブモードで実行
             
             # Check for GEMINI_API_KEY
             log_filename = ""
@@ -309,6 +319,7 @@ def main_tui(stdscr):
                     input("Press Enter to return...")
 
             # Read back the log
+            # 記録されたログを読み込んでバッファに表示
             gemini_output_buffer.clear()
             gemini_output_buffer.append("--- Log of last Gemini CLI session ---")
             if os.path.exists(log_filename) and os.path.getsize(log_filename) > 0:
@@ -335,19 +346,19 @@ if __name__ == "__main__":
     # --- Language & Theme Selection ---
     print("起動設定を選択してください。 (Please select configuration.)")
     print("  1) 日本語 (Japanese) - Default Theme")
-    print("  2) 日本語 (Japanese) - HAL 9000 Theme")
+    print("  2) 日本語 (Japanese) - Spaceship Theme")
     print("  3) 英語 (English) - Default Theme")
-    print("  4) 英語 (English) - HAL 9000 Theme")
+    print("  4) 英語 (English) - Spaceship Theme")
     print("")
     choice = input("番号を入力してください (Enter number) [1]: ").strip()
     
     if choice == "2":
-        MCP_CLIENT_THEME = "hal9000"
+        MCP_CLIENT_THEME = "spaceship"
     elif choice == "3":
         MCP_SERVER_LANG = "en"
     elif choice == "4":
         MCP_SERVER_LANG = "en"
-        MCP_CLIENT_THEME = "hal9000"
+        MCP_CLIENT_THEME = "spaceship"
 
     try:
         curses.wrapper(main_tui)

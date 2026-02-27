@@ -122,12 +122,23 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		return new Response(JSON.stringify({ error: 'Invalid message type' }), { status: 400 });
 	} catch (e: any) {
-		console.error("MCP Error:", e);
+		console.error("MCP Server Error:", e);
+
+		// The MCP client might throw an error object that is not a standard Error instance.
+		// It often contains the actual error message in `e.content[0].text`.
+		let errorMessage = e.message || 'An unknown error occurred.';
+		if (e.content && Array.isArray(e.content) && e.content.length > 0 && e.content[0].text) {
+			errorMessage = e.content[0].text;
+		} else if (typeof e === 'object') {
+			errorMessage = JSON.stringify(e);
+		}
+
 		// Reset client on error to force reconnection
 		if (client) {
 			try { await client.close(); } catch {}
 			client = null;
 		}
-		return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+
+		return new Response(JSON.stringify({ error: errorMessage, isError: true }), { status: 500, headers: { 'Content-Type': 'application/json' } });
 	}
 };

@@ -1,6 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 
 /**
+ * Gemini Liveで使用するモデル名
+ */
+export const GEMINI_LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
+
+/**
  * Gemini Live APIとの通信を管理するための設定インターフェース。
  */
 export interface GeminiLiveConfig {
@@ -8,6 +13,7 @@ export interface GeminiLiveConfig {
     onDisconnect?: () => void; // 切断時に呼び出されるコールバック
     onError?: (error: any) => void; // エラー発生時に呼び出されるコールバック
     onVolume?: (micLevel: number, speakerLevel: number) => void; // 音量レベル更新時に呼び出されるコールバック (0.0 - 1.0)
+    onUserQuery?: (text: string, isFinal: boolean) => void; // ユーザーの音声認識結果（中間・最終）受信時に呼び出されるコールバック
     onModelResponse?: (text: string) => void; // モデルからのテキスト応答受信時に呼び出されるコールバック
     onToolCall?: (name: string, args: any) => Promise<any>; // ツール呼び出し要求時に呼び出されるコールバック
 }
@@ -95,7 +101,7 @@ export class GeminiLiveClient {
 
             // WebSocket接続の確立
             const session = await this.client.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+                model: GEMINI_LIVE_MODEL,
                 callbacks: {
                     onopen: () => {
                         console.log("Gemini Live WebSocket Connected");
@@ -294,7 +300,6 @@ export class GeminiLiveClient {
                 constructor() {
                     super();
                     this.bufferSize = 2048;
-                    this.bufferSize = 2048; // バッファサイズ（調整可能）
                     this.buffer = new Float32Array(this.bufferSize);
                     this.bufferIndex = 0;
                 }
@@ -303,7 +308,6 @@ export class GeminiLiveClient {
                     const input = inputs[0];
                     if (input.length > 0) {
                         const inputChannel = input[0];
-                        const inputChannel = input[0]; // モノラル入力のみ処理
                         for (let i = 0; i < inputChannel.length; i++) {
                             this.buffer[this.bufferIndex++] = inputChannel[i];
                             if (this.bufferIndex === this.bufferSize) {
@@ -312,18 +316,14 @@ export class GeminiLiveClient {
                         }
                     }
                     return true;
-                    return true; // プロセッサを維持
                 }
 
                 flush() {
-                    // Float32 (-1.0 ~ 1.0) を Int16 (-32768 ~ 32767) に変換
                     const pcmData = new Int16Array(this.bufferSize);
                     for (let i = 0; i < this.bufferSize; i++) {
                         const s = Math.max(-1, Math.min(1, this.buffer[i]));
-                        const s = Math.max(-1, Math.min(1, this.buffer[i])); // クリッピング
                         pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     }
-                    // メインスレッドにデータを送信
                     this.port.postMessage(pcmData);
                     this.bufferIndex = 0;
                 }
@@ -356,7 +356,6 @@ export class GeminiLiveClient {
             // ユーザーが割り込んだ場合（発話中にユーザーが話し始めた場合など）
             if (serverContent.interrupted) {
                 console.log("Interrupted!");
-                this.stopAudioPlayback();
                 this.stopAudioPlayback(); // 現在の再生を即座に停止
             }
 
@@ -366,7 +365,7 @@ export class GeminiLiveClient {
                 for (const part of parts) {
                     // テキスト部分の処理（字幕やログ表示用）
                     if (part.text) {
-                        console.log("Geminiのセリフ（文字起こし）:", part.text);
+                        console.log("Gemini text:", part.text);
                         if (this.config.onModelResponse) {
                             this.config.onModelResponse(part.text);
                         }
@@ -382,6 +381,21 @@ export class GeminiLiveClient {
         } else if (msg.toolCall) {
             // ツール呼び出し要求の処理
             this.handleToolCall(msg.toolCall);
+        } else if (msg.userQuery) {
+            // ユーザーの音声認識結果を処理
+            this.handleUserQuery(msg.userQuery);
+        }
+    }
+
+    /**
+     * ユーザーの音声認識結果（中間および最終）を処理します。
+     * @param userQuery - サーバーから受信したuserQueryオブジェクト。
+     */
+    private handleUserQuery(userQuery: any) {
+        const text = userQuery.parts?.map((p: any) => p.text).join('') || '';
+        if (this.config.onUserQuery) {
+            // isFinalフラグと共にテキストをコールバックで通知
+            this.config.onUserQuery(text, userQuery.isFinal);
         }
     }
 
@@ -397,6 +411,7 @@ export class GeminiLiveClient {
             let result = {};
 
             // クライアント側で定義されたツール実行関数を呼び出し
+            // +page.svelteなどで定義されたコールバックが実行されます
             if (this.config.onToolCall) {
                 result = await this.config.onToolCall(call.name, call.args);
             }

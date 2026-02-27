@@ -1,1493 +1,25 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { env } from "$env/dynamic/public";
-  import { GeminiLiveClient } from "$lib/gemini";
-
-  // For TensorFlow.js
-
-  interface Tool {
-    name: string;
-    description?: string;
-    inputSchema: Record<string, any>;
-  }
-
-  let tools = $state<Tool[]>([]);
-  let error = $state<string | null>(null);
-  let cameraImage = $state<string | null>(null);
-  let capturing = $state(false);
-  let selectedTool = $state<Tool | null>(null);
-  let toolArgs = $state<Record<string, any>>({});
-  let executionResult = $state<{ text?: string; image?: string } | null>(null);
-  let isExecuting = $state(false);
-  let tfReady = $state(false);
-  let detectionModel = $state("yolo11n");
-  let detecting = $state(false);
-  let targetMarker = $state<{ x: number; y: number } | null>(null);
-  let targetImageCoords = $state<{ u: number; v: number } | null>(null);
-  let targetWorldCoords = $state<{ x: number; y: number } | null>(null);
-  let detectedObjects = $state<any[]>([]);
-  let visualizeAxes = $state(true);
-  let detectionConfidence = $state(0.7);
-
-  // Pick & Place State
-  let ppImage = $state<string | null>(null);
-  let ppCapturing = $state(false);
-  let ppPickPoint = $state<{
-    u: number;
-    v: number;
-    xm: number;
-    ym: number;
-    x: number;
-    y: number;
-    u_norm: number;
-    v_norm: number;
-  } | null>(null);
-  let ppPlacePoint = $state<{
-    u: number;
-    v: number;
-    xm: number;
-    ym: number;
-    x: number;
-    y: number;
-    u_norm: number;
-    v_norm: number;
-  } | null>(null);
-  let ppExecuting = $state(false);
-  let ppPickZ = $state(20);
-  let ppPlaceZ = $state(30);
-  let ppSafetyZ = $state(70);
-  let ppLive = $state(false);
-  let liveInterval: any = null;
-  let ppShowDetections = $state(false);
-  let ppDetectionInterval = $state(500); // ms
-  let ppDetections = $state<any[]>([]);
-  let ppDetectionPolling = $state(false);
-  let ppShowTrajectory = $state(false);
-  let ppHoveredObject = $state<any>(null);
-  let lastPPMousePosition = $state<{ x: number; y: number } | null>(null);
-  let ppTrajectoryPoints = $state<{ u: number; v: number }[]>([]);
-  let ppImageDim = $state<{ w: number; h: number } | null>(null);
-  let joypadLeft = $state({ x: 0, y: 0 });
-  let joypadRight = $state({ x: 0, y: 0 });
-  let currentRobotPos = $state({ x: 0, y: 0, z: 0 });
-  let lastJoypadState = $state<Record<string, any>>({});
-
-  // Gemini Monitor State
-  let geminiLive = $state(false);
-  let cliMonitor = $state(false);
-  let geminiLogs = $state<any[]>([]);
-  let geminiDetections = $state<any[]>([]);
-  let geminiTrajectoryPoints = $state<any[]>([]);
-  let geminiImageDim = $state<{ w: number; h: number } | null>(null);
-  let geminiClient = $state<GeminiLiveClient | null>(null);
-  let geminiMicLevel = $state(0);
-  let geminiSpeakerLevel = $state(0);
-  let geminiStatus = $state("Disconnected");
-  let geminiLiveLog = $state<
-    { source: "user" | "model" | "tool"; content: string }[]
-  >([]);
-  let geminiInterimTranscript = $state("");
-  let cliMonitorLoaded = $state(false);
-  let cliMonitorImageSrc = $state<string | null>(null);
-  let geminiLiveMonitorLoaded = $state(false);
-  let geminiLiveMonitorImageSrc = $state<string | null>(null);
-
-  let conversationLogElement: HTMLElement | null = null;
-
-  let isPollingLogs = false;
-
-  // Theme settings
-  let currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "default"); // 'default' or 'hal9000'
-
-  $effect(() => {
-    if (typeof window !== "undefined") {
-      document.body.classList.remove("theme-default", "theme-hal9000");
-      if (currentTheme === "hal9000") {
-        document.body.classList.add("theme-hal9000");
-      } else {
-        document.body.classList.add("theme-default");
-      }
-    }
-  });
-
-  let ppDetectionTimeout: any = null;
-  $effect(() => {
-    if (ppShowDetections && ppLive) {
-      // Start polling
-      clearTimeout(ppDetectionTimeout); // Clear any existing timer
-      pollDetections();
-    } else {
-      // Stop polling
-      clearTimeout(ppDetectionTimeout);
-      ppDetections = [];
-    }
-    return () => clearTimeout(ppDetectionTimeout);
-  });
-
-  $effect(() => {
-    if (ppPickPoint && ppPlacePoint && ppShowTrajectory) {
-      updateTrajectory(ppPickPoint, ppPlacePoint, ppPickZ, ppPlaceZ, ppSafetyZ);
-    } else {
-      ppTrajectoryPoints = [];
-    }
-  });
-
-  // Language Settings
-  type Lang = "ja" | "en";
-  let currentLang = $state<Lang>((env.PUBLIC_MCP_LANGUAGE as Lang) || "ja");
-
-  const translations = {
-    ja: {
-      title: "最も安い4軸ロボットアーム",
-      tab_tools: "MCPツール",
-      tab_resources: "MCPリソース",
-      tab_camera: "ロボットの目",
-      tab_control: "ロボット操縦（手動・半自動）",
-      tab_gemini_cli: "ロボット操縦（Gemini CLI）",
-      tab_gemini_live: "ロボット操縦（Gemini Live）",
-      tab_settings: "設定",
-      loading_tools: "ツールを読み込み中...",
-      error_tools: "ツールの読み込みエラー: ",
-      capture: "撮影",
-      loading_resources: "リソースを読み込み中...",
-      error_resources: "リソースの読み込みエラー: ",
-      read_resource: "読み込み",
-      no_resources: "リソースが見つかりません",
-      capturing: "撮影中...",
-      detect: "検出",
-      detecting: "検出中...",
-      transform: "座標変換",
-      live: "ライブ",
-      stop_live: "ライブ停止",
-      clear: "クリア",
-      pick_place: "Pick & Place",
-      running: "実行中...",
-      pick_z: "Pick Z (mm)",
-      place_z: "Place Z (mm)",
-      safety_z: "Safety Z (mm)",
-      no_image: "画像がありません",
-      click_live: "'ライブ'をクリックしてPick & Place操作を開始してください",
-      settings_lang: "言語設定",
-      joypad_left: "左",
-      joypad_right: "右",
-      gemini_live_placeholder: "Gemini Live VLA評価画面追加予定",
-      show_detections: "物体検出",
-      interval_ms: "更新間隔(ms)",
-      confidence: "信頼度",
-      show_trajectory: "軌道表示",
-      gemini_monitor_desc: "Gemini CLIによる操作をモニタリングします。",
-      gemini_live_monitor_desc: "Gemini Liveによる操作をモニタリングします。",
-      theme_settings: "テーマ設定",
-      theme_default: "デフォルト",
-      theme_hal9000: "宇宙船 (HAL 9000)",
-      mjpeg_loading: "ストリームを読み込み中...",
-      mjpeg_error: "ストリームが利用できません。",
-      gemini_live_conversation_header: "推論パス",
-    },
-    en: {
-      title: "The Cheapest 4-DoF Robot Arm",
-      tab_tools: "MCP Tools",
-      tab_camera: "Robot Vision",
-      tab_control: "Robot Control (Manual/Semi-Auto)",
-      tab_gemini_cli: "Robot Control (Gemini CLI)",
-      tab_gemini_live: "Robot Control (Gemini Live)",
-      tab_settings: "Settings",
-      loading_tools: "Loading tools...",
-      error_tools: "Error loading tools: ",
-      capture: "Capture",
-      capturing: "Capturing...",
-      detect: "Detect",
-      detecting: "Detecting...",
-      transform: "Transform",
-      live: "Live",
-      stop_live: "Stop Live",
-      clear: "Clear",
-      pick_place: "Pick & Place",
-      running: "Running...",
-      pick_z: "Pick Z (mm)",
-      place_z: "Place Z (mm)",
-      safety_z: "Safety Z (mm)",
-      no_image: "No image captured",
-      click_live: "Click 'Live' to start Pick & Place operation",
-      settings_lang: "Language",
-      joypad_left: "Left",
-      joypad_right: "Right",
-      gemini_live_placeholder: "Gemini Live VLA evaluation screen coming soon",
-      show_detections: "Object Detection",
-      interval_ms: "Interval (ms)",
-      confidence: "Confidence",
-      show_trajectory: "Show Trajectory",
-      gemini_monitor_desc: "Monitor operations performed by Gemini CLI.",
-      gemini_live_monitor_desc: "Monitor operations performed by Gemini Live.",
-      theme_settings: "Theme Settings",
-      theme_default: "Default",
-      theme_hal9000: "Spaceship (HAL 9000)",
-      mjpeg_loading: "Loading stream...",
-      mjpeg_error: "Stream unavailable.",
-      gemini_live_conversation_header: "Reasoning Path",
-    },
-  };
-
-  let t = $derived(translations[currentLang]);
-
-  const boxColors = [
-    "#FF3838", // Red
-    "#18FFFF", // Cyan
-    "#FFEA00", // Yellow
-    "#76FF03", // Lime
-    "#F50057", // Pink
-    "#651FFF", // Purple
-    "#FF6D00", // Orange
-  ];
-
-  const colorNameMap: Record<string, string> = {
-    red: "#FF3838",
-    orange: "#FF6D00",
-    yellow: "#FFEA00",
-    green: "#76FF03",
-    blue: "#2979FF",
-    purple: "#651FFF",
-    pink: "#F50057",
-    black: "#000000",
-    white: "#FFFFFF",
-    gray: "#9E9E9E",
-    unknown: "#9E9E9E",
-  };
-
-  function getColorForObject(obj: any) {
-    if (obj.color_name && colorNameMap[obj.color_name]) {
-      return colorNameMap[obj.color_name];
-    }
-    return "#9E9E9E";
-  }
-
-  function getTextColor(hexcolor: string) {
-    const yiq =
-      (parseInt(hexcolor.substring(1, 3), 16) * 299 +
-        parseInt(hexcolor.substring(3, 5), 16) * 587 +
-        parseInt(hexcolor.substring(5, 7), 16) * 114) /
-      1000;
-    return yiq >= 128 ? "black" : "white";
-  }
-
-  async function loadTools() {
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({ type: "list_tools" }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const data = await res.json();
-      if (data.tools) {
-        tools = data.tools as Tool[];
-      } else {
-        error = data.error || "Failed to load tools";
-      }
-    } catch (e: any) {
-      error = e.message;
-    }
-  }
-
-  function openToolModal(tool: Tool) {
-    selectedTool = tool;
-    toolArgs = {};
-    executionResult = null;
-    if (tool.inputSchema?.properties) {
-      for (const key in tool.inputSchema.properties) {
-        const prop = tool.inputSchema.properties[key];
-        if (prop.default !== undefined) {
-          toolArgs[key] = prop.default;
-        } else if (prop.type === "boolean") {
-          toolArgs[key] = false;
-        } else {
-          toolArgs[key] = "";
-        }
-      }
-    }
-  }
-
-  async function executeTool() {
-    if (!selectedTool) return;
-    isExecuting = true;
-    executionResult = null;
-    try {
-      console.log(`Executing tool: ${selectedTool.name}`, toolArgs);
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: selectedTool.name,
-          arguments: { ...toolArgs, calling_client: "web_client" },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      let text = "";
-      let image = undefined;
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const parsed = JSON.parse(content.text);
-              if (parsed.image_jpeg_base64) {
-                image = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
-                // 画像以外のデータをJSONテキストとして表示
-                const { image_jpeg_base64, ...rest } = parsed;
-                if (Object.keys(rest).length > 0) {
-                  text += JSON.stringify(rest, null, 2) + "\n";
-                }
-                continue;
-              }
-            } catch (e) {}
-            text += content.text + "\n";
-          }
-        }
-      } else {
-        text = JSON.stringify(result, null, 2);
-      }
-      executionResult = { text: text.trim(), image };
-    } catch (e: any) {
-      console.error("Tool execution failed:", e);
-      executionResult = { text: `Error: ${e.message}` };
-    } finally {
-      isExecuting = false;
-    }
-  }
-
-  async function captureImage() {
-    capturing = true;
-    targetMarker = null;
-    targetImageCoords = null;
-    targetWorldCoords = null;
-    detectedObjects = [];
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "get_live_image",
-          arguments: {
-            visualize_axes: visualizeAxes,
-            return_image: true,
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const parsed = JSON.parse(content.text);
-              if (parsed.image_jpeg_base64) {
-                cameraImage = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
-                return;
-              }
-            } catch (e) {
-              // Ignore parsing errors, might be plain text error
-            }
-            if (content.text.startsWith("Error")) {
-              alert(content.text);
-              return;
-            }
-          }
-        }
-      }
-      alert(`Unexpected result:\n${JSON.stringify(result, null, 2)}`);
-    } catch (e: any) {
-      console.error("Capture failed:", e);
-      alert(`Error: ${e.message}`);
-    } finally {
-      capturing = false;
-    }
-  }
-
-  async function detectObjects() {
-    if (detectionModel === "tensorflow.js") {
-      await detectObjectsTF();
-    } else if (detectionModel === "yolo11n") {
-      await detectObjectsYolo();
-    } else {
-      await detectObjectsGemini();
-    }
-  }
-
-  async function detectObjectsYolo() {
-    detecting = true;
-    targetMarker = null;
-    targetImageCoords = null;
-    targetWorldCoords = null;
-    detectedObjects = [];
-
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "get_live_image",
-          arguments: {
-            visualize_axes: visualizeAxes,
-            detect_objects: true,
-            confidence: Number(detectionConfidence),
-            return_image: true,
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const parsed = JSON.parse(content.text);
-              if (parsed.image_jpeg_base64) {
-                cameraImage = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
-                if (parsed.detections && Array.isArray(parsed.detections)) {
-                  console.log("Detections received:", parsed.detections);
-                  detectedObjects = parsed.detections.map((o: any) => ({
-                    label: o.label,
-                    confidence: o.confidence,
-                    box_2d: o.box_2d,
-                    ground_center: o.ground_center,
-                    color_name: o.color_name,
-                    imageCoords: null,
-                    worldCoords: null,
-                    isTransforming: false,
-                  }));
-                }
-                return;
-              }
-            } catch (e) {}
-            if (content.text.startsWith("Error")) {
-              alert(content.text);
-              return;
-            }
-          }
-        }
-      }
-    } catch (e: any) {
-      console.error("Detection failed:", e);
-      alert(`Error: ${e.message}`);
-    } finally {
-      detecting = false;
-    }
-  }
-
-  async function detectObjectsGemini() {
-    detecting = true;
-    targetMarker = null;
-    targetImageCoords = null;
-    targetWorldCoords = null;
-    detectedObjects = [];
-
-    try {
-      // 1. MCPサーバーから最新画像を取得 (get_live_imageツールを使用)
-      const resImg = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "get_live_image",
-          arguments: {
-            visualize_axes: visualizeAxes,
-            return_image: true,
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const resultImg = await resImg.json();
-
-      let currentImgBase64 = null;
-      // MCPのレスポンスから画像を抽出
-      if (resultImg.content && Array.isArray(resultImg.content)) {
-        for (const content of resultImg.content) {
-          if (content.type === "text") {
-            try {
-              const parsed = JSON.parse(content.text);
-              if (parsed.image_jpeg_base64) {
-                currentImgBase64 = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
-                cameraImage = currentImgBase64; // UI更新
-              }
-            } catch (e) {}
-          }
-        }
-      }
-
-      if (!currentImgBase64) {
-        throw new Error("Failed to capture image from robot camera.");
-      }
-
-      // 2. Node.jsサーバー経由でGemini APIを呼び出し
-      const resGemini = await fetch("/api/gemini", {
-        method: "POST",
-        body: JSON.stringify({
-          image: currentImgBase64,
-          model: detectionModel,
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-
-      if (!resGemini.ok) {
-        const errText = await resGemini.text();
-        throw new Error(
-          `Server Error (${resGemini.status}): ${errText.slice(0, 100)}...`,
-        );
-      }
-
-      const resultGemini = await resGemini.json();
-
-      if (resultGemini.error) {
-        throw new Error(resultGemini.error);
-      }
-
-      if (resultGemini.detections && Array.isArray(resultGemini.detections)) {
-        console.log("Gemini Detections:", resultGemini.detections);
-        detectedObjects = resultGemini.detections.map((o: any) => ({
-          label: o.label,
-          confidence: o.confidence,
-          box_2d: o.box_2d,
-          ground_center: o.ground_center,
-          color_name: o.color_name,
-          imageCoords: null,
-          worldCoords: null,
-          isTransforming: false,
-        }));
-      }
-    } catch (e: any) {
-      console.error("Gemini Detection failed:", e);
-      alert(`Error: ${e.message}`);
-    } finally {
-      detecting = false;
-    }
-  }
-
-  async function detectObjectsTF() {
-    if (!tfReady || !cameraImage) {
-      alert("TensorFlow.js is not ready or no image has been captured.");
-      return;
-    }
-    detecting = true;
-    detectedObjects = [];
-
-    try {
-      const imgElement = document.createElement("img");
-      imgElement.src = cameraImage;
-      await new Promise((resolve) => (imgElement.onload = resolve));
-
-      // @ts-ignore
-      const model = await window.cocoSsd.load();
-      const predictions = await model.detect(imgElement);
-
-      detectedObjects = predictions
-        .map((p: any) => ({
-          label: p.class,
-          box_2d: [
-            (p.bbox[1] / imgElement.naturalHeight) * 1000, // ymin
-            (p.bbox[0] / imgElement.naturalWidth) * 1000, // xmin
-            ((p.bbox[1] + p.bbox[3]) / imgElement.naturalHeight) * 1000, // ymax
-            ((p.bbox[0] + p.bbox[2]) / imgElement.naturalWidth) * 1000, // xmax
-          ],
-        }))
-        .map((o: any) => ({
-          ...o,
-          imageCoords: null,
-          worldCoords: null,
-          isTransforming: false,
-        }));
-    } finally {
-      detecting = false;
-    }
-  }
-
-  async function transformAllObjects() {
-    await Promise.all(detectedObjects.map((_, i) => transformObjectCoords(i)));
-  }
-
-  async function transformObjectCoords(index: number) {
-    const obj = detectedObjects[index];
-    if (!obj || !cameraImage) return;
-
-    obj.isTransforming = true;
-    detectedObjects = [...detectedObjects];
-
-    try {
-      const img = new Image();
-      img.src = cameraImage;
-      await new Promise((resolve) => (img.onload = resolve));
-      const { naturalWidth: width, naturalHeight: height } = img;
-
-      const groundContactY = obj.ground_center
-        ? obj.ground_center.v_norm
-        : obj.box_2d[2];
-      const groundContactX = obj.ground_center
-        ? obj.ground_center.u_norm
-        : (obj.box_2d[1] + obj.box_2d[3]) / 2;
-
-      const u = Math.floor((groundContactX * width) / 1000);
-      const v = Math.floor((groundContactY * height) / 1000);
-
-      obj.imageCoords = { u, v };
-
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "convert_coordinates",
-          arguments: {
-            x: u,
-            y: v,
-            source: "pixel",
-            target: "world",
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const coords = JSON.parse(content.text);
-              if (typeof coords.x === "number") {
-                obj.worldCoords = { x: coords.x, y: coords.y };
-                return;
-              }
-            } catch (e) {}
-            if (content.text.startsWith("Error")) {
-              alert(content.text);
-              return;
-            }
-          }
-        }
-      }
-    } catch (e: any) {
-      console.error("Conversion failed:", e);
-      alert(`Error: ${e.message}`);
-    } finally {
-      obj.isTransforming = false;
-      detectedObjects = [...detectedObjects];
-    }
-  }
-
-  async function convertImageCoordsToWorld(u: number, v: number) {
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "convert_coordinates",
-          arguments: {
-            x: u,
-            y: v,
-            source: "pixel",
-            target: "world",
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const coords = JSON.parse(content.text);
-              if (typeof coords.x === "number") {
-                targetWorldCoords = coords;
-                return;
-              }
-            } catch (e) {}
-            if (content.text.startsWith("Error")) {
-              alert(content.text);
-            }
-          }
-        }
-      }
-    } catch (e: any) {
-      console.error("Conversion failed:", e);
-      alert(`Error: ${e.message}`);
-    }
-  }
-
-  async function convertWorldToImage(x: number, y: number, z: number) {
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "convert_coordinates",
-          arguments: {
-            x,
-            y,
-            z,
-            source: "world",
-            target: "pixel",
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const coords = JSON.parse(content.text);
-              if (
-                typeof coords.u === "number" &&
-                typeof coords.v === "number"
-              ) {
-                return { u: coords.u, v: coords.v };
-              }
-            } catch (e) {}
-          }
-        }
-      }
-    } catch (e: any) {
-      console.warn(
-        "convert_coordinates failed (tool might be missing on server):",
-        e.message,
-      );
-    }
-    return null;
-  }
-
-  async function updateTrajectory(
-    pickPt: any,
-    placePt: any,
-    pickZ: number,
-    placeZ: number,
-    safetyZ: number,
-  ) {
-    // Check if the conversion tool is available
-    const hasTool = tools.some((t) => t.name === "convert_coordinates");
-    if (!hasTool) {
-      // Fallback: just draw a line between Pick and Place
-      ppTrajectoryPoints = [
-        { u: pickPt.u, v: pickPt.v },
-        { u: placePt.u, v: placePt.v },
-      ];
-      return;
-    }
-
-    const home = { x: 110, y: 0, z: 70 };
-    const pZ = Math.max(0, pickZ);
-    const plZ = Math.max(0, placeZ);
-    const sZ = Math.max(0, safetyZ);
-
-    const path = [
-      home,
-      { x: home.x, y: home.y, z: sZ },
-      { x: pickPt.x, y: pickPt.y, z: sZ },
-      { x: pickPt.x, y: pickPt.y, z: pZ },
-      { x: pickPt.x, y: pickPt.y, z: sZ },
-      { x: placePt.x, y: placePt.y, z: sZ },
-      { x: placePt.x, y: placePt.y, z: plZ },
-      { x: placePt.x, y: placePt.y, z: sZ },
-      home,
-    ];
-
-    const points2D = [];
-    for (const p of path) {
-      const uv = await convertWorldToImage(p.x, p.y, p.z);
-      if (uv) {
-        points2D.push(uv);
-      } else {
-        // Fallback: use known image coords for Pick/Place locations
-        // This ignores Z visual difference if tool is missing, but keeps lines connected
-        if (p.x === pickPt.x && p.y === pickPt.y) {
-          points2D.push({ u: pickPt.u, v: pickPt.v });
-        } else if (p.x === placePt.x && p.y === placePt.y) {
-          points2D.push({ u: placePt.u, v: placePt.v });
-        }
-        // Skip Home if conversion fails
-      }
-    }
-    ppTrajectoryPoints = points2D;
-  }
-
-  function handleImageClick(
-    event: MouseEvent & { currentTarget: HTMLImageElement },
-  ) {
-    const img = event.currentTarget;
-    const rect = img.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    let u = Math.floor(x * (img.naturalWidth / rect.width));
-    let v = Math.floor(y * (img.naturalHeight / rect.height));
-
-    // Clamp coordinates to image bounds
-    u = Math.max(0, Math.min(u, img.naturalWidth - 1));
-    v = Math.max(0, Math.min(v, img.naturalHeight - 1));
-
-    targetMarker = {
-      x: x,
-      y: y,
-    };
-
-    targetImageCoords = { u, v };
-    targetWorldCoords = null;
-
-    convertImageCoordsToWorld(u, v);
-  }
-
-  async function capturePPImage(keepPoints = false) {
-    ppCapturing = true;
-    if (!keepPoints) {
-      ppPickPoint = null;
-      ppPlacePoint = null;
-    }
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "get_live_image",
-          arguments: {
-            visualize_axes: true,
-            return_image: true,
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const parsed = JSON.parse(content.text);
-              if (parsed.image_jpeg_base64) {
-                ppImage = `data:image/jpeg;base64,${parsed.image_jpeg_base64}`;
-                return;
-              }
-            } catch (e) {}
-            if (content.text.startsWith("Error")) {
-              alert(content.text);
-              return;
-            }
-          }
-        }
-      }
-    } catch (e: any) {
-      console.error("PP Capture failed:", e);
-      alert(`Error: ${e.message}`);
-    } finally {
-      ppCapturing = false;
-    }
-  }
-
-  async function handlePPImageClick(event: MouseEvent) {
-    if (ppExecuting) return;
-
-    const img = event.target as HTMLImageElement;
-    const rect = img.getBoundingClientRect();
-    const x_click = event.clientX - rect.left;
-    const y_click = event.clientY - rect.top;
-
-    let u = Math.floor(x_click * (img.naturalWidth / rect.width));
-    let v = Math.floor(y_click * (img.naturalHeight / rect.height));
-
-    u = Math.max(0, Math.min(u, img.naturalWidth - 1));
-    v = Math.max(0, Math.min(v, img.naturalHeight - 1));
-
-    const u_norm = u / img.naturalWidth;
-    const v_norm = v / img.naturalHeight;
-
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "convert_coordinates",
-          arguments: {
-            x: u,
-            y: v,
-            source: "pixel",
-            target: "marker",
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const coords = JSON.parse(content.text);
-              if (typeof coords.xm === "number") {
-                // Get World Coordinates from Marker Coordinates
-                let worldCoords = { x: 0, y: 0 };
-                try {
-                  const resWorld = await fetch("/mcp", {
-                    method: "POST",
-                    body: JSON.stringify({
-                      type: "call_tool",
-                      name: "convert_coordinates",
-                      arguments: {
-                        x: coords.xm,
-                        y: coords.ym,
-                        z: coords.zm || 0,
-                        source: "marker",
-                        target: "world",
-                        calling_client: "web_client",
-                      },
-                    }),
-                    headers: { "Content-Type": "application/json" },
-                  });
-                  const resultWorld = await resWorld.json();
-                  if (resultWorld.content) {
-                    for (const c of resultWorld.content) {
-                      if (c.type === "text") {
-                        const wc = JSON.parse(c.text);
-                        if (typeof wc.x === "number") worldCoords = wc;
-                      }
-                    }
-                  }
-                } catch (e) {
-                  console.error("Failed to convert to world coords", e);
-                }
-
-                const pt = {
-                  u,
-                  v,
-                  xm: coords.xm,
-                  ym: coords.ym, // Marker coords
-                  x: worldCoords.x,
-                  y: worldCoords.y, // World coords
-                  u_norm,
-                  v_norm,
-                };
-
-                if (!ppPickPoint) {
-                  ppPickPoint = pt;
-                } else if (!ppPlacePoint) {
-                  ppPlacePoint = pt;
-                } else {
-                  ppPickPoint = pt;
-                  ppPlacePoint = null;
-                }
-                return;
-              }
-            } catch (e) {}
-            if (content.text.startsWith("Error")) {
-              alert(content.text);
-            }
-          }
-        }
-      }
-    } catch (e: any) {
-      console.error("PP Conversion failed:", e);
-      alert(`Error: ${e.message}`);
-    }
-  }
-
-  function handlePPMouseMove(event: MouseEvent) {
-    const target = event.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    // Normalize to 0-1000
-    const mx = (x / rect.width) * 1000;
-    const my = (y / rect.height) * 1000;
-
-    lastPPMousePosition = { x: mx, y: my };
-    updatePPHover();
-  }
-
-  function handlePPMouseLeave() {
-    lastPPMousePosition = null;
-    ppHoveredObject = null;
-  }
-
-  function updatePPHover() {
-    if (!lastPPMousePosition || !ppShowDetections) {
-      ppHoveredObject = null;
-      return;
-    }
-    const { x: mx, y: my } = lastPPMousePosition;
-    let found = null;
-    for (let i = ppDetections.length - 1; i >= 0; i--) {
-      const obj = ppDetections[i];
-      const [ymin, xmin, ymax, xmax] = obj.box_2d;
-      if (mx >= xmin && mx <= xmax && my >= ymin && my <= ymax) {
-        found = obj;
-        break;
-      }
-    }
-    ppHoveredObject = found;
-  }
-
-  async function pollDetections() {
-    if (!ppLive || !ppShowDetections || ppDetectionPolling) {
-      return;
-    }
-    ppDetectionPolling = true;
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "get_live_image",
-          arguments: {
-            detect_objects: true,
-            return_image: false, // Only get detections
-            confidence: Number(detectionConfidence),
-            calling_client: "web_client",
-          },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-      if (result.content && Array.isArray(result.content)) {
-        for (const content of result.content) {
-          if (content.type === "text") {
-            try {
-              const parsed = JSON.parse(content.text);
-              if (parsed.detections && Array.isArray(parsed.detections)) {
-                ppDetections = parsed.detections;
-                updatePPHover();
-              }
-            } catch (e) {
-              console.error("Error parsing detection poll response:", e);
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Detection polling failed:", e);
-    } finally {
-      ppDetectionPolling = false;
-      // Schedule next poll
-      if (ppLive && ppShowDetections) {
-        ppDetectionTimeout = setTimeout(pollDetections, ppDetectionInterval);
-      }
-    }
-  }
-
-  function clearPPPoints() {
-    ppPickPoint = null;
-    ppPlacePoint = null;
-  }
-
-  function toggleLive() {
-    ppLive = !ppLive;
-    if (ppLive) {
-      // ストリーミングURLを設定 (ポート8000)
-      ppImage = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
-      if (ppShowDetections) {
-        pollDetections();
-      }
-    } else {
-      ppImage = null;
-      if (liveInterval) {
-        clearInterval(liveInterval);
-        liveInterval = null;
-      }
-      clearTimeout(ppDetectionTimeout);
-      ppDetections = [];
-    }
-  }
-
-  async function runPickAndPlace() {
-    if (!ppPickPoint || !ppPlacePoint) return;
-    ppExecuting = true;
-    currentRobotPos = { x: 0, y: 0, z: 0 };
-
-    const pickZ = Number(ppPickZ ?? 20);
-    const placeZ = Number(ppPlaceZ ?? 30);
-    const safetyZ = Number(ppSafetyZ ?? 70);
-
-    // Sequence from mcp_server.py vision_system.py
-    const cmds = [
-      "grip open",
-      `move z=${safetyZ} s=100`,
-      `move x=${ppPickPoint.x} y=${ppPickPoint.y} z=${safetyZ} s=100`,
-      `move z=${pickZ} s=50`,
-      "grip close",
-      "delay t=1000",
-      `move z=${safetyZ} s=100`,
-      `move x=${ppPlacePoint.x} y=${ppPlacePoint.y} z=${safetyZ} s=100`,
-      `move z=${placeZ} s=50`,
-      "grip open",
-      "delay t=1000",
-      `move z=${safetyZ} s=100`,
-      "move x=110 y=0 z=70 s=50",
-    ];
-
-    try {
-      for (const cmd of cmds) {
-        const res = await fetch("/mcp", {
-          method: "POST",
-          body: JSON.stringify({
-            type: "call_tool",
-            name: "execute_sequence",
-            arguments: { commands: cmd, calling_client: "web_client" },
-          }),
-          headers: { "Content-Type": "application/json" },
-        });
-        const result = await res.json();
-        console.log(`Cmd: ${cmd}, Result:`, result);
-      }
-    } catch (e: any) {
-      console.error("P&P Execution failed:", e);
-      alert(`Error: ${e.message}`);
-    } finally {
-      ppExecuting = false;
-      joypadLeft = { x: 0, y: 0 };
-      joypadRight = { x: 0, y: 0 };
-    }
-  }
-
-  async function pollGeminiLogs() {
-    if (!geminiLive && !cliMonitor) {
-      isPollingLogs = false;
-      return;
-    }
-
-    isPollingLogs = true;
-    try {
-      const res = await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "get_tool_logs",
-          arguments: { calling_client: "web_client" },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      const result = await res.json();
-
-      if (result.content && Array.isArray(result.content)) {
-        const text = result.content.find((c: any) => c.type === "text")?.text;
-        if (text) {
-          const logs = JSON.parse(text);
-          // Reverse to show newest first
-          geminiLogs = logs.reverse();
-
-          // Parse latest relevant logs for visualization
-          if (geminiLogs.length > 0) {
-            parseGeminiVisuals(geminiLogs);
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Gemini log polling failed:", e);
-    }
-
-    if (geminiLive || cliMonitor) {
-      setTimeout(pollGeminiLogs, 1000);
-    }
-  }
-
-  async function parseGeminiVisuals(logs: any[]) {
-    // 1. Detections: Only show if the LATEST log is get_live_image with detections
-    const latestLog = logs.length > 0 ? logs[0] : null;
-
-    if (
-      latestLog &&
-      latestLog.tool === "get_live_image" &&
-      latestLog.args?.detect_objects
-    ) {
-      if (latestLog.result) {
-        try {
-          const res = JSON.parse(latestLog.result);
-          if (res.detections) {
-            geminiDetections = res.detections;
-          } else {
-            geminiDetections = [];
-          }
-        } catch (e) {
-          geminiDetections = [];
-        }
-      }
-    } else {
-      geminiDetections = [];
-    }
-
-    // Find latest movement sequence
-    const moveLog = logs.find((l: any) => l.tool === "execute_sequence");
-    if (moveLog && moveLog.args?.commands) {
-      const cmds = moveLog.args.commands.split(";");
-      const points3D = [];
-
-      // Add Home position at start (TCP initial position)
-      const home = { x: 110, y: 0, z: 70, type: "home" };
-      points3D.push(home);
-
-      // Simple parser for "move x=... y=... z=..."
-      for (const cmd of cmds) {
-        const c = cmd.trim();
-        if (c.toLowerCase().startsWith("move")) {
-          const xMatch = c.match(/x\s*=\s*([-+]?\d*\.?\d+)/i);
-          const yMatch = c.match(/y\s*=\s*([-+]?\d*\.?\d+)/i);
-          const zMatch = c.match(/z\s*=\s*([-+]?\d*\.?\d+)/i);
-
-          if (xMatch && yMatch && zMatch) {
-            points3D.push({
-              x: parseFloat(xMatch[1]),
-              y: parseFloat(yMatch[1]),
-              z: parseFloat(zMatch[1]),
-              type: "waypoint",
-            });
-          }
-        }
-      }
-
-      // Add Home position at end (Return to initial position)
-      points3D.push({ ...home, type: "home" });
-
-      console.log("Parsed 3D Points:", points3D);
-      if (points3D.length > 0) {
-        const points2D = [];
-        for (const p of points3D) {
-          const uv = await convertWorldToImage(p.x, p.y, p.z);
-          if (uv) {
-            points2D.push({
-              u: uv.u,
-              v: uv.v,
-              x: p.x,
-              y: p.y,
-              z: p.z,
-              type: p.type,
-            });
-          }
-        }
-        geminiTrajectoryPoints = points2D;
-      } else {
-        geminiTrajectoryPoints = [];
-      }
-    } else {
-      geminiTrajectoryPoints = [];
-    }
-  }
-
-  function toggleCliMonitor() {
-    cliMonitor = !cliMonitor;
-    if (cliMonitor) {
-      cliMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
-      cliMonitorLoaded = false;
-      if (!isPollingLogs) pollGeminiLogs();
-    } else {
-      cliMonitorImageSrc = null;
-      geminiDetections = [];
-      geminiTrajectoryPoints = [];
-    }
-  }
-
-  function playConnectedSound() {
-    try {
-      const AudioContextClass =
-        window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioContextClass();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.1);
-    } catch (e) {}
-  }
-
-  async function toggleGeminiLive() {
-    geminiLive = !geminiLive;
-    if (geminiLive) {
-      geminiLiveMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
-      geminiLiveMonitorLoaded = false;
-      // Start Monitor
-      geminiLiveLog = [];
-      geminiInterimTranscript = "";
-
-      // Start Gemini Live Client
-
-      if (!isPollingLogs) pollGeminiLogs();
-
-      geminiClient = new GeminiLiveClient({
-        onConnect: () => {
-          geminiStatus = "Connected";
-          playConnectedSound();
-        },
-        onDisconnect: () => {
-          geminiStatus = "Disconnected";
-          geminiMicLevel = 0;
-          geminiSpeakerLevel = 0;
-        },
-        onError: (e) => {
-          geminiStatus = `Error: ${e.message || e}`;
-          console.error("Gemini Live Error:", e);
-          if (geminiLive) toggleGeminiLive(); // Stop on error
-        },
-        onVolume: (mic, speaker) => {
-          if (mic > 0) geminiMicLevel = mic;
-          if (speaker > 0) geminiSpeakerLevel = speaker;
-        },
-        onModelResponse: (text) => {
-          const lastLog = geminiLiveLog[geminiLiveLog.length - 1];
-          if (lastLog && lastLog.source === "model") {
-            lastLog.content += text;
-          } else {
-            geminiLiveLog.push({ source: "model", content: text });
-          }
-        },
-        onToolCall: async (name, args) => {
-          const toolLog = `Calling ${name}(${JSON.stringify(args)})`;
-          geminiLiveLog = [
-            ...geminiLiveLog,
-            { source: "tool", content: toolLog },
-          ];
-          console.log("Gemini Live Tool Call:", name, args);
-          try {
-            const res = await fetch("/mcp", {
-              method: "POST",
-              body: JSON.stringify({
-                type: "call_tool",
-                name: name,
-                arguments: { ...args, calling_client: "gemini_live" },
-              }),
-              headers: { "Content-Type": "application/json" },
-            });
-            const result = await res.json();
-            const resultLog = `Result: ${JSON.stringify(result)}`;
-            geminiLiveLog = [
-              ...geminiLiveLog,
-              { source: "tool", content: resultLog },
-            ];
-            return JSON.stringify(result);
-          } catch (e: any) {
-            const errorLog = `Error executing tool ${name}: ${e.message}`;
-            geminiLiveLog = [
-              ...geminiLiveLog,
-              { source: "tool", content: errorLog },
-            ];
-            return `Error executing tool ${name}: ${e.message}`;
-          }
-        },
-      });
-      await geminiClient.connect(tools);
-    } else {
-      geminiLiveMonitorImageSrc = null;
-      geminiDetections = [];
-      geminiTrajectoryPoints = [];
-      if (geminiClient) geminiClient.disconnect();
-    }
-  }
-
-  $effect(() => {
-    geminiLiveLog;
-    geminiInterimTranscript;
-    if (conversationLogElement) {
-      // Scroll to bottom when geminiLiveLog changes
-      conversationLogElement.scrollTop = conversationLogElement.scrollHeight;
-    }
-  });
-
-  async function executeSingleCommand(cmd: string) {
-    try {
-      await fetch("/mcp", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "call_tool",
-          name: "execute_sequence",
-          arguments: { commands: cmd, calling_client: "web_client" },
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (e) {
-      console.error(`Failed to execute command: ${cmd}`, e);
-    }
-  }
-
+  import { AppState } from "./state.svelte";
+  import CameraTab from "./components/CameraTab.svelte";
+  // 他のタブコンポーネントも同様にインポート
+  import ControlTab from "./components/ControlTab.svelte";
+  import GeminiLiveTab from "./components/GeminiLiveTab.svelte";
+  import GeminiCliTab from "./components/GeminiCliTab.svelte";
+  import ToolsTab from "./components/ToolsTab.svelte";
+  import SettingsTab from "./components/SettingsTab.svelte";
+
+  
+  const appState = new AppState();
+
+  // --- Lifecycle Hooks ---
   onMount(() => {
     let mounted = true;
     let cleanupFn = () => {};
     const sse = new EventSource("/mcp");
     sse.onmessage = (e) => console.log("SSE:", e.data);
 
-    (async () => {
-      await loadTools();
-      await executeSingleCommand("move x=110 y=0 z=70 s=50");
-
-      // Load TensorFlow.js and then COCO-SSD model to ensure correct dependency order
-      const tfScript = document.createElement("script");
-      tfScript.src = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs";
-      tfScript.async = true;
-
-      tfScript.onload = () => {
-        const cocoSsdScript = document.createElement("script");
-        cocoSsdScript.src =
-          "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd";
-        cocoSsdScript.async = true;
-        cocoSsdScript.onload = () => {
-          tfReady = true;
-        };
-        document.head.appendChild(cocoSsdScript);
-      };
-
-      document.head.appendChild(tfScript);
-    })();
-
-    const joypadLoop = async () => {
-      if (!mounted) return;
-      let nextDelay = 100;
-      if (!ppExecuting) {
-        try {
-          const res = await fetch("/mcp", {
-            method: "POST",
-            body: JSON.stringify({
-              type: "call_tool",
-              name: "get_joypad_status",
-              arguments: {},
-            }),
-            headers: { "Content-Type": "application/json" },
-          });
-          if (res.ok) {
-            const result = await res.json();
-            if (result.content && Array.isArray(result.content)) {
-              const text = result.content.find(
-                (c: any) => c.type === "text",
-              )?.text;
-              if (text) {
-                const state = JSON.parse(text);
-                const scale = 10 / 128; // UI scale factor
-                joypadLeft = {
-                  x: (state.X ?? 0) * scale,
-                  y: (state.Y ?? 0) * scale,
-                };
-                joypadRight = {
-                  x: (state.RX ?? 0) * scale,
-                  y: (state.RY ?? 0) * scale,
-                };
-              }
-            }
-          } else {
-            nextDelay = 2000;
-          }
-        } catch (e) {
-          nextDelay = 2000;
-        }
-      }
-      if (mounted) setTimeout(joypadLoop, nextDelay);
-    };
-    joypadLoop();
+    appState.init();
 
     return () => {
       mounted = false;
@@ -1498,7 +30,7 @@
 </script>
 
 <svelte:head>
-  <title>{currentTheme === "hal9000" ? t.theme_hal9000 : t.title}</title>
+  <title>{appState.currentTheme === "spaceship" ? appState.t.theme_spaceship : appState.t.title}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link
     rel="preconnect"
@@ -1525,7 +57,7 @@
 
 <main class="container mt-3">
   <div>
-    <h2>{currentTheme === "hal9000" ? t.theme_hal9000 : t.title}</h2>
+    <h2>{appState.currentTheme === "spaceship" ? appState.t.theme_spaceship : appState.t.title}</h2>
     <ul
       class="nav nav-tabs mt-3 flex-nowrap overflow-x-auto"
       id="myTab"
@@ -1540,7 +72,7 @@
           type="button"
           role="tab"
           aria-controls="camera-tab-pane"
-          aria-selected="true">{t.tab_camera}</button
+          aria-selected="true">{appState.t.tab_camera}</button
         >
       </li>
       <li class="nav-item" role="presentation">
@@ -1552,7 +84,7 @@
           type="button"
           role="tab"
           aria-controls="pp-tab-pane"
-          aria-selected="false">{t.tab_control}</button
+          aria-selected="false">{appState.t.tab_control}</button
         >
       </li>
       <li class="nav-item" role="presentation">
@@ -1564,7 +96,7 @@
           type="button"
           role="tab"
           aria-controls="gemini-cli-tab-pane"
-          aria-selected="false">{t.tab_gemini_cli}</button
+          aria-selected="false">{appState.t.tab_gemini_cli}</button
         >
       </li>
       <li class="nav-item" role="presentation">
@@ -1576,7 +108,7 @@
           type="button"
           role="tab"
           aria-controls="gemini-live-tab-pane"
-          aria-selected="false">{t.tab_gemini_live}</button
+          aria-selected="false">{appState.t.tab_gemini_live}</button
         >
       </li>
       <li class="nav-item" role="presentation">
@@ -1588,7 +120,7 @@
           type="button"
           role="tab"
           aria-controls="home-tab-pane"
-          aria-selected="false">{t.tab_tools}</button
+          aria-selected="false">{appState.t.tab_tools}</button
         >
       </li>
       <li class="nav-item" role="presentation">
@@ -1600,7 +132,7 @@
           type="button"
           role="tab"
           aria-controls="settings-tab-pane"
-          aria-selected="false">{t.tab_settings}</button
+          aria-selected="false">{appState.t.tab_settings}</button
         >
       </li>
     </ul>
@@ -1615,191 +147,7 @@
         aria-labelledby="camera-tab"
         tabindex="0"
       >
-        <div class="d-flex flex-column align-items-center mt-3">
-          <div class="mb-3 d-flex gap-2 align-items-center">
-            <select class="form-select w-auto" bind:value={detectionModel}>
-              <option value="yolo11n">yolo11n</option>
-              <option value="tensorflow.js">tensorflow.js</option>
-              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-              <option value="gemini-robotics-er-1.5-preview"
-                >gemini-robotics-er-1.5-preview</option
-              >
-            </select>
-            <div class="form-check">
-              <input
-                class="form-check-input"
-                type="checkbox"
-                id="visualizeAxesCheck"
-                bind:checked={visualizeAxes}
-              />
-              <label class="form-check-label" for="visualizeAxesCheck"
-                >Axes</label
-              >
-            </div>
-            <div class="input-group input-group-sm" style="width: auto;">
-              <span class="input-group-text">{t.confidence}</span>
-              <input
-                type="number"
-                class="form-control"
-                style="width: 80px;"
-                bind:value={detectionConfidence}
-                min="0.1"
-                max="1.0"
-                step="0.1"
-              />
-            </div>
-            <button
-              class="btn btn-primary"
-              onclick={captureImage}
-              disabled={capturing}
-            >
-              {capturing ? t.capturing : t.capture}
-            </button>
-            <button
-              class="btn btn-primary"
-              onclick={detectObjects}
-              disabled={detecting ||
-                (detectionModel === "tensorflow.js" && !tfReady)}
-            >
-              {#if detecting}{t.detecting}
-              {:else if detectionModel === "tensorflow.js" && !tfReady}Loading
-                TF.js...
-              {:else}{t.detect}{/if}
-            </button>
-            <button
-              class="btn btn-primary"
-              onclick={transformAllObjects}
-              disabled={detectedObjects.length === 0}
-            >
-              {t.transform}
-            </button>
-          </div>
-          {#if cameraImage}
-            <div class="position-relative d-inline-block">
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-              <img
-                src={cameraImage}
-                alt="Robot Camera View"
-                class="img-fluid border rounded"
-                style="max-height: 440px; cursor: crosshair;"
-                onclick={handleImageClick}
-              />
-              {#each detectedObjects as obj, i}
-                {@const color = getColorForObject(obj)}
-                {#if obj.ground_center}
-                  {@const groundContactX = obj.ground_center.u_norm / 10}
-                  {@const groundContactY = obj.ground_center.v_norm / 10}
-                  {#if obj.label.endsWith("_ok") && obj.ground_center.radius_u_norm}
-                    <div
-                      style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj
-                        .ground_center.radius_u_norm /
-                        10) *
-                        2}%; height: {(obj.ground_center.radius_v_norm / 10) *
-                        2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0.7; z-index: 5;"
-                    ></div>
-                  {/if}
-                  {#if obj.ground_center.u_top_norm !== undefined}
-                    {@const topX = obj.ground_center.u_top_norm / 10}
-                    {@const topY = obj.ground_center.v_top_norm / 10}
-                    <svg
-                      style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;"
-                    >
-                      <line
-                        x1="{groundContactX}%"
-                        y1="{groundContactY}%"
-                        x2="{topX}%"
-                        y2="{topY}%"
-                        stroke={color}
-                        stroke-width="2"
-                        stroke-dasharray="4"
-                      />
-                    </svg>
-                    <div
-                      style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                    ></div>
-                  {/if}
-                  <div
-                    style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                  ></div>
-                {/if}
-                <div
-                  style="position: absolute; left: {obj.box_2d[1] /
-                    10}%; top: {obj.box_2d[0] / 10}%; width: {(obj.box_2d[3] -
-                    obj.box_2d[1]) /
-                    10}%; height: {(obj.box_2d[2] - obj.box_2d[0]) /
-                    10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;"
-                >
-                  <span
-                    style="background: {color}; color: {getTextColor(
-                      color,
-                    )}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;"
-                    >{obj.label}{obj.color_name
-                      ? ` (${obj.color_name})`
-                      : ""}</span
-                  >
-                </div>
-                {#if obj.ground_center}
-                  <div
-                    style="position: absolute; left: {obj.ground_center.u_norm /
-                      10}%; top: {obj.ground_center.v_norm /
-                      10}%; transform: translateX(15px) translateY(-50%); pointer-events: auto; display: flex; align-items: center; gap: 5px; z-index: 5;"
-                  >
-                    {#if obj.imageCoords}
-                      <div
-                        style="background: rgba(0,0,0,0.7); color: white; padding: 2px 5px; border-radius: 3px; font-size: 0.7em; font-family: monospace; white-space: nowrap;"
-                      >
-                        <div>
-                          u: {obj.imageCoords.u}, v: {obj.imageCoords.v} (px)
-                        </div>
-                        {#if obj.worldCoords}
-                          <div>
-                            x: {obj.worldCoords.x.toFixed(1)}, y: {obj.worldCoords.y.toFixed(
-                              1,
-                            )} (mm)
-                          </div>
-                        {/if}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-              {/each}
-              {#if targetMarker}
-                <div
-                  style="position: absolute; left: {targetMarker.x}px; top: {targetMarker.y}px; width: 0; height: 0; pointer-events: none;"
-                >
-                  <div
-                    style="position: absolute; width: 20px; height: 20px; border: 2px solid red; border-radius: 50%; transform: translate(-50%, -50%);"
-                  ></div>
-                  <span
-                    style="position: absolute; left: 15px; top: -12px; color: red; font-weight: bold; text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.5); white-space: nowrap;"
-                    >TARGET</span
-                  >
-                </div>
-              {/if}
-              {#if targetImageCoords}
-                <div
-                  style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 5px 10px; border-radius: 4px; pointer-events: none; font-family: monospace;"
-                >
-                  <div>
-                    u: {targetImageCoords.u}, v: {targetImageCoords.v} (px)
-                  </div>
-                  {#if targetWorldCoords}
-                    <div>
-                      x: {targetWorldCoords.x.toFixed(1)}, y: {targetWorldCoords.y.toFixed(
-                        1,
-                      )} (mm)
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {:else}
-            <div class="text-muted p-5 border rounded bg-light">
-              {t.no_image}
-            </div>
-          {/if}
-        </div>
+        <CameraTab {appState} />
       </div>
       <div
         class="tab-pane fade"
@@ -1808,295 +156,7 @@
         aria-labelledby="pp-tab"
         tabindex="0"
       >
-        <div class="d-flex flex-column align-items-center mt-2">
-          <!-- Control Panel -->
-          <div class="d-flex flex-column gap-2 mb-2 w-100 align-items-center">
-            <!-- Row 1: Camera & Detection -->
-            <div class="d-flex gap-2 flex-wrap justify-content-center">
-              <div
-                class="border rounded p-2 d-flex gap-2 align-items-center bg-light shadow-sm"
-              >
-                <button
-                  class="btn {ppLive
-                    ? 'btn-danger'
-                    : 'btn-outline-danger'} btn-sm"
-                  onclick={toggleLive}
-                >
-                  {ppLive ? t.stop_live : t.live}
-                </button>
-                <div class="vr mx-1"></div>
-                <button
-                  class="btn btn-secondary btn-sm"
-                  onclick={clearPPPoints}
-                  disabled={ppExecuting}
-                >
-                  {t.clear}
-                </button>
-                <button
-                  class="btn btn-success btn-sm"
-                  onclick={runPickAndPlace}
-                  disabled={!ppPickPoint || !ppPlacePoint || ppExecuting}
-                >
-                  {ppExecuting ? t.running : t.pick_place}
-                </button>
-              </div>
-              <div
-                class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center"
-              >
-                <div class="form-check form-switch mb-0">
-                  <input
-                    class="form-check-input"
-                    type="checkbox"
-                    role="switch"
-                    id="ppShowDetectionsSwitch"
-                    bind:checked={ppShowDetections}
-                  />
-                  <label class="form-check-label" for="ppShowDetectionsSwitch"
-                    >{t.show_detections}</label
-                  >
-                </div>
-                <div class="input-group input-group-sm" style="width: auto;">
-                  <span class="input-group-text">{t.interval_ms}</span>
-                  <input
-                    type="text"
-                    class="form-control"
-                    style="width: 65px;"
-                    bind:value={ppDetectionInterval}
-                    disabled={!ppShowDetections}
-                  />
-                </div>
-                <div class="input-group input-group-sm" style="width: auto;">
-                  <span class="input-group-text">{t.confidence}</span>
-                  <input
-                    type="number"
-                    class="form-control"
-                    style="width: 65px;"
-                    bind:value={detectionConfidence}
-                    min="0.1"
-                    max="1.0"
-                    step="0.1"
-                    disabled={!ppShowDetections}
-                  />
-                </div>
-              </div>
-            </div>
-            <!-- Row 2: P&P Settings & Actions -->
-            <div class="d-flex gap-2 flex-wrap justify-content-center">
-              <div
-                class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center"
-              >
-                <div class="form-check form-switch mb-0">
-                  <input
-                    class="form-check-input"
-                    type="checkbox"
-                    role="switch"
-                    id="ppShowTrajectorySwitch"
-                    bind:checked={ppShowTrajectory}
-                  />
-                  <label class="form-check-label" for="ppShowTrajectorySwitch"
-                    >{t.show_trajectory}</label
-                  >
-                </div>
-                <div class="input-group input-group-sm" style="width: auto;">
-                  <span class="input-group-text px-1">Pick Z</span>
-                  <input
-                    type="number"
-                    class="form-control px-1"
-                    style="width: 65px;"
-                    bind:value={ppPickZ}
-                  />
-                  <span class="input-group-text px-1">Place Z</span>
-                  <input
-                    type="number"
-                    class="form-control px-1"
-                    style="width: 65px;"
-                    bind:value={ppPlaceZ}
-                  />
-                  <span class="input-group-text px-1">Safe Z</span>
-                  <input
-                    type="number"
-                    class="form-control px-1"
-                    style="width: 65px;"
-                    bind:value={ppSafetyZ}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {#if ppImage}
-            <div
-              class="position-relative d-inline-block"
-              onmousemove={handlePPMouseMove}
-              onmouseleave={handlePPMouseLeave}
-              role="group"
-            >
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-              <img
-                src={ppImage}
-                alt="Pick & Place View"
-                class="img-fluid border rounded"
-                style="max-height: 440px; cursor: crosshair;"
-                onclick={handlePPImageClick}
-                onload={(e) => {
-                  const img = e.currentTarget as HTMLImageElement;
-                  ppImageDim = { w: img.naturalWidth, h: img.naturalHeight };
-                }}
-              />
-
-              {#if ppShowDetections}
-                {#each ppDetections as obj}
-                  {@const color = getColorForObject(obj)}
-                  {#if obj.ground_center}
-                    {@const groundContactX = obj.ground_center.u_norm / 10}
-                    {@const groundContactY = obj.ground_center.v_norm / 10}
-                    {#if obj.label.endsWith("_ok") && obj.ground_center.radius_u_norm}
-                      <div
-                        style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: {(obj
-                          .ground_center.radius_u_norm /
-                          10) *
-                          2}%; height: {(obj.ground_center.radius_v_norm / 10) *
-                          2}%; border: 1px dashed {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5; opacity: 0.7;"
-                      ></div>
-                    {/if}
-                    {#if obj.ground_center.u_top_norm !== undefined}
-                      {@const topX = obj.ground_center.u_top_norm / 10}
-                      {@const topY = obj.ground_center.v_top_norm / 10}
-                      <svg
-                        style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;"
-                      >
-                        <line
-                          x1="{groundContactX}%"
-                          y1="{groundContactY}%"
-                          x2="{topX}%"
-                          y2="{topY}%"
-                          stroke={color}
-                          stroke-width="2"
-                          stroke-dasharray="4"
-                        />
-                      </svg>
-                      <div
-                        style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                      ></div>
-                    {/if}
-                    <div
-                      style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                    ></div>
-                  {/if}
-                  <div
-                    style="position: absolute; left: {obj.box_2d[1] /
-                      10}%; top: {obj.box_2d[0] / 10}%; width: {(obj.box_2d[3] -
-                      obj.box_2d[1]) /
-                      10}%; height: {(obj.box_2d[2] - obj.box_2d[0]) /
-                      10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;"
-                  >
-                    <span
-                      style="background: {color}; color: {getTextColor(
-                        color,
-                      )}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;"
-                      >{obj.label}{ppHoveredObject === obj && obj.color_name
-                        ? ` (${obj.color_name})`
-                        : ""}</span
-                    >
-                  </div>
-                {/each}
-              {/if}
-
-              {#if ppShowTrajectory && ppTrajectoryPoints.length > 0 && ppImageDim}
-                <svg
-                  viewBox="0 0 {ppImageDim.w} {ppImageDim.h}"
-                  style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;"
-                >
-                  <polyline
-                    points={ppTrajectoryPoints
-                      .map((p) => `${p.u},${p.v}`)
-                      .join(" ")}
-                    fill="none"
-                    stroke="deeppink"
-                    stroke-width="3"
-                    stroke-dasharray="5,5"
-                  />
-                  {#each ppTrajectoryPoints as p}
-                    <circle cx={p.u} cy={p.v} r="3" fill="deeppink" />
-                  {/each}
-                </svg>
-              {/if}
-
-              {#if ppPickPoint}
-                {@const pt = ppPickPoint}
-                <div
-                  style="position: absolute; left: {pt.u_norm *
-                    100}%; top: {pt.v_norm *
-                    100}%; transform: translate(-50%, -50%); pointer-events: none;"
-                >
-                  <div
-                    style="width: 10px; height: 10px; background: purple; border-radius: 50%;"
-                  ></div>
-                  <div
-                    style="position: absolute; top: -10px; left: 15px; background: rgba(0,0,0,0.5); color: white; padding: 4px; border-radius: 4px; font-size: 0.8em; white-space: nowrap;"
-                  >
-                    <div style="font-weight: bold; color: #d0a0ff;">Pick</div>
-                    <div>u:{pt.u}, v:{pt.v}</div>
-                    <div>xm:{pt.xm.toFixed(1)}, ym:{pt.ym.toFixed(1)}</div>
-                    <div>x:{pt.x.toFixed(1)}, y:{pt.y.toFixed(1)}</div>
-                  </div>
-                </div>
-              {/if}
-
-              {#if ppPlacePoint}
-                {@const pt = ppPlacePoint}
-                <div
-                  style="position: absolute; left: {pt.u_norm *
-                    100}%; top: {pt.v_norm *
-                    100}%; transform: translate(-50%, -50%); pointer-events: none;"
-                >
-                  <div
-                    style="width: 10px; height: 10px; background: blue; border-radius: 50%;"
-                  ></div>
-                  <div
-                    style="position: absolute; top: -10px; left: 15px; background: rgba(0,0,0,0.5); color: white; padding: 4px; border-radius: 4px; font-size: 0.8em; white-space: nowrap;"
-                  >
-                    <div style="font-weight: bold; color: #a0a0ff;">Place</div>
-                    <div>u:{pt.u}, v:{pt.v}</div>
-                    <div>xm:{pt.xm.toFixed(1)}, ym:{pt.ym.toFixed(1)}</div>
-                    <div>x:{pt.x.toFixed(1)}, y:{pt.y.toFixed(1)}</div>
-                  </div>
-                </div>
-              {/if}
-            </div>
-          {:else}
-            <div class="text-muted p-5 border rounded bg-light">
-              {t.click_live}
-            </div>
-          {/if}
-
-          <!-- Joypad Visualization -->
-          <div
-            class="d-flex flex-column align-items-center mt-1 mb-1 p-1 border rounded bg-light"
-          >
-            <div class="d-flex gap-4 justify-content-center">
-              <div class="joypad-stick">
-                <div class="stick-label">{t.joypad_left}</div>
-                <div class="stick-base">
-                  <div
-                    class="stick-knob"
-                    style="transform: translate({joypadLeft.x}px, {joypadLeft.y}px)"
-                  ></div>
-                </div>
-              </div>
-              <div class="joypad-stick">
-                <div class="stick-label">{t.joypad_right}</div>
-                <div class="stick-base">
-                  <div
-                    class="stick-knob"
-                    style="transform: translate({joypadRight.x}px, {joypadRight.y}px)"
-                  ></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ControlTab {appState} />
       </div>
       <div
         class="tab-pane fade"
@@ -2105,166 +165,7 @@
         aria-labelledby="gemini-cli-tab"
         tabindex="0"
       >
-        <div class="container-fluid mt-1 mb-1">
-          <div class="row mb-3">
-            <div class="col-12 d-flex align-items-center gap-3">
-              <button
-                class="btn {cliMonitor ? 'btn-danger' : 'btn-outline-danger'}"
-                onclick={toggleCliMonitor}
-              >
-                {cliMonitor ? t.stop_live : t.live}
-              </button>
-              <span class="text-muted">{t.gemini_monitor_desc}</span>
-            </div>
-          </div>
-          <div class="row">
-            <!-- Left: Live Monitor -->
-            <div class="col-md-6">
-              <div class="card">
-                <div class="card-header">Live Monitor</div>
-                <div
-                  class="card-body text-center p-0 bg-dark position-relative d-flex align-items-center justify-content-center"
-                  style="height: 350px;"
-                >
-                  {#if cliMonitor}
-                    <img
-                      src={cliMonitorImageSrc}
-                      alt="Gemini Monitor View"
-                      class="img-fluid"
-                      class:monitor-turn-on={cliMonitorLoaded}
-                      class:opacity-0={!cliMonitorLoaded}
-                      style="max-height: 100%; max-width: 100%;"
-                      onload={(e) => {
-                        cliMonitorLoaded = true;
-                        const img = e.currentTarget as HTMLImageElement;
-                        geminiImageDim = {
-                          w: img.naturalWidth,
-                          h: img.naturalHeight,
-                        };
-                      }}
-                    />
-
-                    <!-- Detections Overlay -->
-                    {#each geminiDetections as obj}
-                      {@const color = getColorForObject(obj)}
-                      {#if obj.ground_center}
-                        {@const groundContactX = obj.ground_center.u_norm / 10}
-                        {@const groundContactY = obj.ground_center.v_norm / 10}
-                        {#if obj.ground_center.u_top_norm !== undefined}
-                          {@const topX = obj.ground_center.u_top_norm / 10}
-                          {@const topY = obj.ground_center.v_top_norm / 10}
-                          <svg
-                            style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;"
-                          >
-                            <line
-                              x1="{groundContactX}%"
-                              y1="{groundContactY}%"
-                              x2="{topX}%"
-                              y2="{topY}%"
-                              stroke={color}
-                              stroke-width="2"
-                              stroke-dasharray="4"
-                            />
-                          </svg>
-                          <div
-                            style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                          ></div>
-                        {/if}
-                        <div
-                          style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                        ></div>
-                      {/if}
-                      <div
-                        style="position: absolute; left: {obj.box_2d[1] /
-                          10}%; top: {obj.box_2d[0] / 10}%; width: {(obj
-                          .box_2d[3] -
-                          obj.box_2d[1]) /
-                          10}%; height: {(obj.box_2d[2] - obj.box_2d[0]) /
-                          10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;"
-                      >
-                        <span
-                          style="background: {color}; color: {getTextColor(
-                            color,
-                          )}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;"
-                          >{obj.label}{obj.color_name
-                            ? ` (${obj.color_name})`
-                            : ""} ({obj.confidence.toFixed(2)})</span
-                        >
-                      </div>
-                    {/each}
-
-                    <!-- Trajectory Overlay -->
-                    {#if geminiTrajectoryPoints.length > 0 && geminiImageDim}
-                      <svg
-                        viewBox="0 0 {geminiImageDim.w} {geminiImageDim.h}"
-                        style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;"
-                      >
-                        <polyline
-                          points={geminiTrajectoryPoints
-                            .map((p) => `${p.u},${p.v}`)
-                            .join(" ")}
-                          fill="none"
-                          stroke="deeppink"
-                          stroke-width="3"
-                          stroke-dasharray="5,5"
-                        />
-                        {#each geminiTrajectoryPoints as p}
-                          <circle cx={p.u} cy={p.v} r="3" fill="deeppink" />
-                        {/each}
-                      </svg>
-                    {/if}
-                  {:else}
-                    <div
-                      class="d-flex align-items-center justify-content-center h-100 blink-subtle"
-                      style="color: #006600; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
-                    >
-                      <p>Offline</p>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-
-            <!-- Right: Tool Logs -->
-            <div class="col-md-6">
-              <div class="card" style="height: 440px;">
-                <div class="card-header">Tool Execution Log</div>
-                <div class="card-body overflow-auto p-0">
-                  <div class="list-group list-group-flush">
-                    {#each geminiLogs as log}
-                      <div class="list-group-item">
-                        <div class="d-flex w-100 justify-content-between">
-                          <h6 class="mb-1 text-primary">{log.tool}</h6>
-                          <small class="text-muted"
-                            >{new Date(
-                              log.timestamp * 1000,
-                            ).toLocaleTimeString()}</small
-                          >
-                        </div>
-                        <div class="mb-1 small">
-                          <strong>Args:</strong>
-                          <span class="text-break"
-                            >{JSON.stringify(log.args)}</span
-                          >
-                        </div>
-                        <div class="small">
-                          <strong>Result:</strong>
-                          <span class="text-muted text-break">{log.result}</span
-                          >
-                        </div>
-                      </div>
-                    {/each}
-                    {#if geminiLogs.length === 0}
-                      <div class="p-3 text-center text-muted">
-                        No logs available
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <GeminiCliTab {appState} />
       </div>
       <div
         class="tab-pane fade"
@@ -2273,213 +174,7 @@
         aria-labelledby="gemini-live-tab"
         tabindex="0"
       >
-        <div class="container-fluid mt-1 mb-1">
-          <div class="row mb-3">
-            <div class="col-12 d-flex align-items-center gap-3">
-              <button
-                class="btn {geminiLive ? 'btn-danger' : 'btn-outline-danger'}"
-                onclick={toggleGeminiLive}
-              >
-                {geminiLive ? t.stop_live : t.live}
-              </button>
-              <span class="text-muted">{t.gemini_live_monitor_desc}</span>
-            </div>
-          </div>
-          <div class="row">
-            <!-- Left: Live Monitor (Copied from Gemini CLI) -->
-            <div class="col-md-6 d-flex flex-column gap-3">
-              <div class="card rounded-bottom-0">
-                <div class="card-header">Live Monitor</div>
-                <div
-                  class="card-body text-center p-0 bg-dark position-relative d-flex align-items-center justify-content-center"
-                  style="height: 350px;"
-                >
-                  {#if geminiLive}
-                    <img
-                      src={geminiLiveMonitorImageSrc}
-                      alt="Gemini Monitor View"
-                      class="img-fluid"
-                      class:monitor-turn-on={geminiLiveMonitorLoaded}
-                      class:opacity-0={!geminiLiveMonitorLoaded}
-                      style="max-height: 100%; max-width: 100%;"
-                      onload={(e) => {
-                        geminiLiveMonitorLoaded = true;
-                        const img = e.currentTarget as HTMLImageElement;
-                        geminiImageDim = {
-                          w: img.naturalWidth,
-                          h: img.naturalHeight,
-                        };
-                      }}
-                    />
-
-                    <!-- Detections Overlay -->
-                    {#each geminiDetections as obj}
-                      {@const color = getColorForObject(obj)}
-                      {#if obj.ground_center}
-                        {@const groundContactX = obj.ground_center.u_norm / 10}
-                        {@const groundContactY = obj.ground_center.v_norm / 10}
-                        {#if obj.ground_center.u_top_norm !== undefined}
-                          {@const topX = obj.ground_center.u_top_norm / 10}
-                          {@const topY = obj.ground_center.v_top_norm / 10}
-                          <svg
-                            style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;"
-                          >
-                            <line
-                              x1="{groundContactX}%"
-                              y1="{groundContactY}%"
-                              x2="{topX}%"
-                              y2="{topY}%"
-                              stroke={color}
-                              stroke-width="2"
-                              stroke-dasharray="4"
-                            />
-                          </svg>
-                          <div
-                            style="position: absolute; left: {topX}%; top: {topY}%; width: 6px; height: 6px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                          ></div>
-                        {/if}
-                        <div
-                          style="position: absolute; left: {groundContactX}%; top: {groundContactY}%; width: 10px; height: 10px; background-color: {color}; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 5;"
-                        ></div>
-                      {/if}
-                      <div
-                        style="position: absolute; left: {obj.box_2d[1] /
-                          10}%; top: {obj.box_2d[0] / 10}%; width: {(obj
-                          .box_2d[3] -
-                          obj.box_2d[1]) /
-                          10}%; height: {(obj.box_2d[2] - obj.box_2d[0]) /
-                          10}%; border: 2px solid {color}; pointer-events: none; z-index: 5;"
-                      >
-                        <span
-                          style="background: {color}; color: {getTextColor(
-                            color,
-                          )}; position: absolute; top: -1.5em; left: 0; padding: 0 2px; font-size: 0.8em; white-space: nowrap;"
-                          >{obj.label}{obj.color_name
-                            ? ` (${obj.color_name})`
-                            : ""} ({obj.confidence.toFixed(2)})</span
-                        >
-                      </div>
-                    {/each}
-
-                    <!-- Trajectory Overlay -->
-                    {#if geminiTrajectoryPoints.length > 0 && geminiImageDim}
-                      <svg
-                        viewBox="0 0 {geminiImageDim.w} {geminiImageDim.h}"
-                        style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;"
-                      >
-                        <polyline
-                          points={geminiTrajectoryPoints
-                            .map((p) => `${p.u},${p.v}`)
-                            .join(" ")}
-                          fill="none"
-                          stroke="deeppink"
-                          stroke-width="3"
-                          stroke-dasharray="5,5"
-                        />
-                        {#each geminiTrajectoryPoints as p}
-                          <circle cx={p.u} cy={p.v} r="3" fill="deeppink" />
-                        {/each}
-                      </svg>
-                    {/if}
-                  {:else}
-                    <div
-                      class="d-flex align-items-center justify-content-center h-100 blink-subtle"
-                      style="color: #006600; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
-                    >
-                      <p>Offline</p>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-                <div class="card">
-                  <div class="card-header">Status</div>
-                  <div class="card-body">
-                    <div class="live-status-header">
-                      <div class="mb-3">
-                        Status: <span
-                          class={geminiStatus === "Connected"
-                            ? "text-success"
-                            : "text-muted"}
-                          style={geminiStatus === "Connected" && currentTheme === "hal9000" ? "color: #00ff00 !important; text-shadow: none;" : ""}
-                          >{geminiStatus}</span
-                        >
-                      </div>
-                      <div class="audio-levels">
-                        <div class="level-row">
-                          <span class="label" style="width: 80px;">Mic</span>
-                          <div class="meter">
-                            <div
-                              class="fill"
-                              style="width: {Math.min(
-                                100,
-                                geminiMicLevel * 100,
-                              )}%"
-                            ></div>
-                          </div>
-                        </div>
-                        <div class="level-row">
-                          <span class="label" style="width: 80px;">Speaker</span
-                          >
-                          <div class="meter">
-                            <div
-                              class="fill"
-                              style="width: {Math.min(
-                                100,
-                                geminiSpeakerLevel * 100,
-                              )}%"
-                            ></div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-            </div>
-            <!-- Right: Placeholder for Gemini Live controls -->
-            <div class="col-md-6">
-              <div class="card h-100 d-flex flex-column" style="max-height: 600px;">
-                <div class="card-header">{t.gemini_live_conversation_header}</div>
-                <div
-                  class="card-body p-0 d-flex flex-column"
-                  style="overflow: hidden;"
-                >
-                  {#if !geminiLive}
-                    <div class="p-3 mt-auto text-muted small">
-                      <p>
-                        Press the "Live" button above the monitor to start voice
-                        control.
-                      </p>
-                      <p>
-                        Try saying: "What do you see?"
-                      </p>
-                    </div>
-                  {:else}
-                    <div
-                      class="conversation-log flex-grow-1 overflow-auto p-2"
-                      style="min-height: 0;"
-                      bind:this={conversationLogElement}
-                    >
-                      {#each geminiLiveLog as log, i (i)}
-                        <div class="log-entry log-{log.source}">
-                          <strong class="log-source">{log.source}</strong>
-                          <span class="log-content">{log.content}</span>
-                        </div>
-                      {/each}
-                      {#if geminiInterimTranscript}
-                        <div class="log-entry log-user interim">
-                          <strong class="log-source">user</strong>
-                          <span class="log-content"
-                            >{geminiInterimTranscript}</span
-                          >
-                        </div>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <GeminiLiveTab {appState} />
       </div>
       <div
         class="tab-pane fade"
@@ -2488,51 +183,7 @@
         aria-labelledby="home-tab"
         tabindex="0"
       >
-        {#if error}
-          <div
-            class="alert alert-danger d-flex justify-content-between align-items-center"
-            role="alert"
-          >
-            <span>{t.error_tools}{error}</span>
-            <button class="btn btn-outline-danger btn-sm" onclick={loadTools}
-              >Refresh</button
-            >
-          </div>
-        {:else if tools.length === 0}
-          <div class="d-flex align-items-center gap-2">
-            <p class="mb-0">{t.loading_tools}</p>
-            <button class="btn btn-sm btn-outline-primary" onclick={loadTools}
-              >Refresh</button
-            >
-          </div>
-        {:else}
-          <div class="d-flex justify-content-end mb-2">
-            <button class="btn btn-sm btn-outline-secondary" onclick={loadTools}
-              >Refresh Tools</button
-            >
-          </div>
-          <div class="list-group">
-            {#each tools as tool}
-              <div class="list-group-item">
-                <div class="d-flex w-100 justify-content-between">
-                  <h5 class="mb-1">{tool.name}</h5>
-                </div>
-                <p class="mb-1">{tool.description}</p>
-                <small class="text-body-secondary"
-                  >Schema: {JSON.stringify(tool.inputSchema)}</small
-                >
-                <div class="mt-2">
-                  <button
-                    class="btn btn-sm btn-primary"
-                    data-bs-toggle="modal"
-                    data-bs-target="#toolModal"
-                    onclick={() => openToolModal(tool)}>Run</button
-                  >
-                </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
+        <ToolsTab {appState} />
       </div>
       <div
         class="tab-pane fade"
@@ -2541,59 +192,16 @@
         aria-labelledby="settings-tab"
         tabindex="0"
       >
-        <div class="p-3">
-          <div class="mb-3">
-            <label for="langSelect" class="form-label">{t.settings_lang}</label>
-            <select
-              class="form-select w-auto"
-              id="langSelect"
-              bind:value={currentLang}
-            >
-              <option value="ja">日本語</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">{t.theme_settings}</label>
-            <div class="btn-group" role="group" aria-label="Theme selector">
-              <input
-                type="radio"
-                class="btn-check"
-                name="themeRadio"
-                id="themeDefault"
-                autocomplete="off"
-                bind:group={currentTheme}
-                value="default"
-              />
-              <label class="btn btn-outline-primary" for="themeDefault"
-                >{t.theme_default}</label
-              >
-
-              <input
-                type="radio"
-                class="btn-check"
-                name="themeRadio"
-                id="themeHal9000"
-                autocomplete="off"
-                bind:group={currentTheme}
-                value="hal9000"
-              />
-              <label class="btn btn-outline-primary" for="themeHal9000"
-                >{t.theme_hal9000}</label
-              >
-            </div>
-          </div>
-        </div>
+        <SettingsTab {appState} />
       </div>
     </div>
   </div>
-
   <!-- Tool Execution Modal -->
   <div class="modal fade" id="toolModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
         <div class="modal-header">
-          <h5 class="modal-title">{selectedTool?.name}</h5>
+          <h5 class="modal-title">{appState.selectedTool?.name}</h5>
           <button
             type="button"
             class="btn-close"
@@ -2601,10 +209,10 @@
             aria-label="Close"
           ></button>
         </div>
-        {#if (selectedTool?.inputSchema?.properties && Object.keys(selectedTool.inputSchema.properties).length > 0) || executionResult}
+        {#if (appState.selectedTool?.inputSchema?.properties && Object.keys(appState.selectedTool.inputSchema.properties).length > 0) || appState.executionResult}
           <div class="modal-body">
-            {#if selectedTool?.inputSchema?.properties && Object.keys(selectedTool.inputSchema.properties).length > 0}
-              {#each Object.entries(selectedTool.inputSchema.properties) as [key, prop]}
+            {#if appState.selectedTool?.inputSchema?.properties && Object.keys(appState.selectedTool.inputSchema.properties).length > 0}
+              {#each Object.entries(appState.selectedTool.inputSchema.properties) as [key, prop]}
                 <div class="mb-3">
                   {#if (prop as any).type === "boolean"}
                     <div class="form-check">
@@ -2612,7 +220,7 @@
                         class="form-check-input"
                         type="checkbox"
                         id="arg-{key}"
-                        bind:checked={toolArgs[key]}
+                        bind:checked={appState.toolArgs[key]}
                       />
                       <label class="form-check-label" for="arg-{key}">
                         {key}
@@ -2624,7 +232,7 @@
                       type="number"
                       class="form-control"
                       id="arg-{key}"
-                      bind:value={toolArgs[key]}
+                      bind:value={appState.toolArgs[key]}
                       placeholder={(prop as any).description || ""}
                     />
                   {:else}
@@ -2633,7 +241,7 @@
                       type="text"
                       class="form-control"
                       id="arg-{key}"
-                      bind:value={toolArgs[key]}
+                      bind:value={appState.toolArgs[key]}
                       placeholder={(prop as any).description || ""}
                     />
                   {/if}
@@ -2641,22 +249,22 @@
               {/each}
             {/if}
 
-            {#if executionResult}
-              {#if selectedTool?.inputSchema?.properties && Object.keys(selectedTool.inputSchema.properties).length > 0}
+            {#if appState.executionResult}
+              {#if appState.selectedTool?.inputSchema?.properties && Object.keys(appState.selectedTool.inputSchema.properties).length > 0}
                 <hr />
               {/if}
               <h6>Result:</h6>
-              {#if executionResult.image}
+              {#if appState.executionResult.image}
                 <img
-                  src={executionResult.image}
+                  src={appState.executionResult.image}
                   class="img-fluid border rounded"
                   alt="Tool Output"
                 />
               {/if}
-              {#if executionResult.text}
+              {#if appState.executionResult.text}
                 <pre
                   class="bg-light p-2 border rounded mt-2"
-                  style="white-space: pre-wrap;">{executionResult.text}</pre>
+                  style="white-space: pre-wrap;">{appState.executionResult.text}</pre>
               {/if}
             {/if}
           </div>
@@ -2670,10 +278,10 @@
           <button
             type="button"
             class="btn btn-primary"
-            onclick={executeTool}
-            disabled={isExecuting}
+            onclick={() => appState.executeTool()}
+            disabled={appState.isExecuting}
           >
-            {isExecuting ? "Running..." : "Execute"}
+            {appState.isExecuting ? "Running..." : "Execute"}
           </button>
         </div>
       </div>
@@ -2682,35 +290,6 @@
 </main>
 
 <style>
-  .joypad-stick {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  .stick-label {
-    font-size: 0.8rem;
-    margin-bottom: 5px;
-    font-weight: bold;
-  }
-  .stick-base {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background-color: #ddd;
-    border: 2px solid #bbb;
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-  }
-  .stick-knob {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background-color: #555;
-    transition: transform 0.2s ease;
-  }
-
   /* Hide scrollbar for tabs but allow scrolling */
   .nav-tabs::-webkit-scrollbar {
     display: none;
@@ -2720,8 +299,8 @@
     scrollbar-width: none; /* Firefox */
   }
 
-  /* --- HAL 9000 Theme --- */
-  :global(body.theme-hal9000) {
+  /* --- Spaceship Theme --- */
+  :global(body.theme-spaceship) {
     background-color: #000;
     font-family: "Orbitron", "Courier New", Courier, monospace;
     color: #e0e0e0;
@@ -2747,7 +326,7 @@
 
   /* タブの状態に応じた背景色を設定 */
 
-  :global(.theme-hal9000 .container) {
+  :global(.theme-spaceship .container) {
     --hal-red: #ff2d2d;
     --hal-red-glow: 0 0 2px #ff2d2d, 0 0 5px #ff2d2d;
     --hal-dark-bg: #0a0a0a;
@@ -2760,240 +339,161 @@
     color: var(--hal-text);
   }
 
-  :global(.theme-hal9000 h2) {
+  :global(.theme-spaceship h2) {
     color: var(--hal-red);
     text-shadow: var(--hal-red-glow);
   }
 
-  :global(.theme-hal9000 .nav-tabs) {
+  :global(.theme-spaceship .nav-tabs) {
     border-bottom-color: var(--hal-border);
   }
 
-  :global(.theme-hal9000 .nav-link) {
+  :global(.theme-spaceship .nav-tabs .nav-link) {
     color: var(--hal-text-muted);
     border-color: transparent;
     background: none;
   }
-  :global(.theme-hal9000 .nav-link.active) {
+  :global(.theme-spaceship .nav-tabs .nav-link.active) {
     color: var(--hal-text); /* Use standard text color for less contrast */
     background-color: var(--hal-dark-bg); /* Match tab content background */
     border-color: var(--hal-border) var(--hal-border) var(--hal-dark-bg);
   }
 
-  :global(.theme-hal9000 .tab-content) {
+  :global(.theme-spaceship .tab-content) {
     background-color: var(--hal-dark-bg);
     border-color: var(--hal-border) !important;
   }
 
-  :global(.theme-hal9000 .card) {
+  :global(.theme-spaceship .card) {
     background-color: var(--hal-card-bg);
     border-color: var(--hal-border);
     color: var(--hal-text);
   }
 
-  :global(.theme-hal9000 .card-header) {
-    background-color: #1a1a1a;
-    border-bottom-color: var(--hal-border);
+  :global(.theme-spaceship .card-header) {
+    background-color: #004d40; /* Teal Green */
+    border-bottom-color: #00796b;
+    text-shadow: 0 0 4px rgba(160, 255, 192, 0.5);
   }
 
-  :global(.theme-hal9000 .bg-light) {
+  :global(.theme-spaceship .bg-light) {
     background-color: #073642 !important; /* Retro dark cyan */
     border-color: var(--hal-border) !important;
   }
 
-  :global(.theme-hal9000 .btn-primary) {
+  :global(.theme-spaceship .btn-primary) {
     background-color: var(--hal-red);
     border-color: var(--hal-red);
     color: #fff;
     box-shadow: var(--hal-red-glow);
   }
-  :global(.theme-hal9000 .btn-primary:hover) {
+  :global(.theme-spaceship .btn-primary:hover) {
     background-color: #ff5555;
     border-color: #ff5555;
   }
-  :global(.theme-hal9000 .btn-outline-danger) {
+  :global(.theme-spaceship .btn-outline-danger) {
     color: var(--hal-red);
     border-color: var(--hal-red);
   }
-  :global(.theme-hal9000 .btn-outline-danger:hover),
-  :global(.theme-hal9000 .btn-danger) {
+  :global(.theme-spaceship .btn-outline-danger:hover),
+  :global(.theme-spaceship .btn-danger) {
     color: #fff;
     background-color: var(--hal-red);
     border-color: var(--hal-red);
     box-shadow: var(--hal-red-glow);
   }
-  :global(.theme-hal9000 .btn-secondary),
-  :global(.theme-hal9000 .btn-outline-secondary) {
+  :global(.theme-spaceship .btn-secondary),
+  :global(.theme-spaceship .btn-outline-secondary) {
     color: var(--hal-text);
     background-color: #333;
     border-color: #555;
   }
-  :global(.theme-hal9000 .btn-secondary:hover),
-  :global(.theme-hal9000 .btn-outline-secondary:hover) {
+  :global(.theme-spaceship .btn-secondary:hover),
+  :global(.theme-spaceship .btn-outline-secondary:hover) {
     background-color: #444;
     border-color: #666;
   }
-  :global(.theme-hal9000 .btn-success) {
+  :global(.theme-spaceship .btn-success) {
     background-color: #00a800;
     border-color: #00a800;
-    color: #000;
-    font-weight: bold;
+    color:  #000;
   }
 
-  :global(.theme-hal9000 .form-control),
-  :global(.theme-hal9000 .form-select) {
+  :global(.theme-spaceship .form-control),
+  :global(.theme-spaceship .form-select) {
     background-color: #222;
     border-color: var(--hal-border);
     color: var(--hal-text);
   }
-  :global(.theme-hal9000 .form-control:focus),
-  :global(.theme-hal9000 .form-select:focus) {
+  :global(.theme-spaceship .form-control:focus),
+  :global(.theme-spaceship .form-select:focus) {
     background-color: #222;
     border-color: var(--hal-red);
     color: var(--hal-text);
     box-shadow: 0 0 0 0.25rem rgba(255, 45, 45, 0.25);
   }
-  :global(.theme-hal9000 .form-control:disabled),
-  :global(.theme-hal9000 .form-select:disabled) {
+  :global(.theme-spaceship .form-control:disabled),
+  :global(.theme-spaceship .form-select:disabled) {
     background-color: #111;
     border-color: #333;
     color: #444;
   }
-  :global(.theme-hal9000 .form-check-input) {
+  :global(.theme-spaceship .form-check-input) {
     background-color: #333;
     border-color: #555;
   }
-  :global(.theme-hal9000 .form-check-input:checked) {
+  :global(.theme-spaceship .form-check-input:checked) {
     background-color: var(--hal-red);
     border-color: var(--hal-red);
   }
-  :global(.theme-hal9000 .input-group-text) {
+  :global(.theme-spaceship .input-group-text) {
     background-color: #333;
     border-color: var(--hal-border);
     color: var(--hal-text-muted);
   }
 
-  :global(.theme-hal9000 .modal-content) {
+  :global(.theme-spaceship .modal-content) {
     background-color: var(--hal-dark-bg);
     border-color: var(--hal-red);
     box-shadow: var(--hal-red-glow);
   }
-  :global(.theme-hal9000 .modal-header),
-  :global(.theme-hal9000 .modal-footer) {
+  :global(.theme-spaceship .modal-header),
+  :global(.theme-spaceship .modal-footer) {
     border-bottom-color: var(--hal-border);
     border-top-color: var(--hal-border);
   }
-  :global(.theme-hal9000 .btn-close) {
+  :global(.theme-spaceship .btn-close) {
     filter: invert(1) grayscale(100%) brightness(200%);
   }
 
-  :global(.theme-hal9000 .list-group-item) {
+  :global(.theme-spaceship .list-group-item) {
     background-color: var(--hal-card-bg);
     border-color: var(--hal-border);
     color: var(--hal-text);
   }
-  :global(.theme-hal9000 .list-group-item h5) {
+  :global(.theme-spaceship .list-group-item h5) {
     color: var(--hal-primary);
   }
 
-  :global(.theme-hal9000 .alert-danger) {
+  :global(.theme-spaceship .alert-danger) {
     background-color: #4d0f0f;
     border-color: var(--hal-red);
     color: var(--hal-text);
   }
 
-  :global(.theme-hal9000 .text-muted),
-  :global(.theme-hal9000 .text-body-secondary) {
+  :global(.theme-spaceship .text-muted),
+  :global(.theme-spaceship .text-body-secondary) {
     color: var(--hal-text-muted) !important;
   }
 
-  :global(.theme-hal9000 .joypad-stick .stick-base) {
-    background-color: #222;
-    border-color: #444;
-  }
-  :global(.theme-hal9000 .joypad-stick .stick-knob) {
-    background-color: var(--hal-red);
+  :global(.theme-spaceship .list-group-item h6) {
+    color: #d869b4;
+    text-shadow: 0 0 5px #d869b4;
   }
 
-  .conversation-log {
-    background-color: #f8f9fa;
-    font-family: monospace;
-    font-size: 0.9em;
-  }
-  .log-entry {
-    padding: 4px 6px;
-    border-bottom: 1px solid #eee;
-    word-break: break-word;
-  }
-  .log-entry:last-child {
-    border-bottom: none;
-  }
-  .log-source {
-    font-weight: bold;
-    margin-right: 8px;
-    text-transform: capitalize;
-  }
-  .log-user .log-source {
-    color: #0d6efd;
-  }
-  .log-model .log-source {
-    color: #198754;
-  }
-  .log-tool .log-source {
-    color: #6c757d;
-  }
-  .log-entry.interim {
-    opacity: 0.6;
-  }
-
-  :global(.theme-hal9000 .conversation-log) {
-    background-color: #073642; /* Retro dark cyan */
-    border-color: var(--hal-border) !important;
-    font-family: "Orbitron", "Courier New", Courier, monospace;
-  }
-  :global(.theme-hal9000 .log-entry) {
-    border-bottom-color: #222;
-  }
-  :global(.theme-hal9000 .log-user .log-source) {
+  :global(.theme-spaceship .list-group-item small) {
     color: #87cefa;
-  } /* LightSkyBlue */
-  :global(.theme-hal9000 .log-model .log-source) {
-    color: #90ee90;
-  } /* LightGreen */
-  :global(.theme-hal9000 .log-tool .log-source) {
-    color: var(--hal-text-muted);
-  }
-
-  /* Audio Meter Styles */
-  .audio-levels {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .level-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 0.9em;
-  }
-  .meter {
-    flex: 1;
-    height: 8px;
-    background: #eee;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .fill {
-    height: 100%;
-    background: #28a745;
-    transition: width 0.1s ease;
-  }
-
-  :global(.theme-hal9000 .meter) {
-    background: #333;
-  }
-  :global(.theme-hal9000 .fill) {
-    background: #00ff00;
+    text-shadow: 0 0 3px #87cefa;
   }
 
   /* Monitor Turn-on Effect */
