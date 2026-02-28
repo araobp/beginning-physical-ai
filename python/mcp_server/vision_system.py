@@ -517,21 +517,23 @@ class VisionSystem:
             return "gray"
 
         # 色相による判定 (OpenCV H: 0-179)
-        if h < 10 or h >= 170:
-            return "red"
-        if h < 30:
-            return "orange"
-        if h < 50:
-            return "yellow"
-        if h < 75:
-            return "green"
-        if h < 120:
-            return "blue"
-        if h < 145:
-            return "purple"
-        if h < 170:
-            return "pink"
-        return "unknown"
+        color_name = "unknown"
+        if h < 5 or h >= 179:
+            color_name = "red"
+        elif h < 45:
+            color_name = "orange"
+        elif h < 70:
+            color_name = "yellow"
+        elif h < 95:
+            color_name = "green"
+        elif h < 115:
+            color_name = "blue"
+        elif h < 175:
+            color_name = "purple"
+        elif h < 179:
+            color_name = "pink"
+        print(f"Debug: Detected {color_name} color with HSV=({h}, {s}, {v})")
+        return color_name
 
     def detect_objects(self, model, confidence=0.7):
         """
