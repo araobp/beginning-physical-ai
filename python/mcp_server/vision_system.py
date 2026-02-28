@@ -532,7 +532,7 @@ class VisionSystem:
             color_name = "purple"
         elif h < 179:
             color_name = "pink"
-        print(f"Debug: Detected {color_name} color with HSV=({h}, {s}, {v})")
+        # print(f"Debug: Detected {color_name} color with HSV=({h}, {s}, {v})")
         return color_name
 
     def detect_objects(self, model, confidence=0.7):

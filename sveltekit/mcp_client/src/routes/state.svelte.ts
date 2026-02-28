@@ -777,19 +777,29 @@ export class AppState {
       home,
     ];
 
-    const pointCache = new Map<string, { u: number, v: number } | null>();
-    const points2D = [];
+    // Deduplicate points to minimize API calls
+    const uniquePointsMap = new Map<string, typeof path[0]>();
+    path.forEach(p => {
+      const key = `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
+      if (!uniquePointsMap.has(key)) {
+        uniquePointsMap.set(key, p);
+      }
+    });
 
+    // Fetch conversions in parallel
+    const conversionPromises = Array.from(uniquePointsMap.entries()).map(async ([key, p]) => {
+      const uv = await this.convertWorldToImage(p.x, p.y, p.z);
+      return { key, uv };
+    });
+
+    const conversions = await Promise.all(conversionPromises);
+    const conversionMap = new Map(conversions.map(c => [c.key, c.uv]));
+
+    // Reconstruct path
+    const points2D = [];
     for (const p of path) {
       const key = `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
-      let uv: { u: number, v: number } | null;
-
-      if (pointCache.has(key)) {
-        uv = pointCache.get(key)!;
-      } else {
-        uv = await this.convertWorldToImage(p.x, p.y, p.z);
-        pointCache.set(key, uv);
-      }
+      const uv = conversionMap.get(key);
 
       if (uv) {
         points2D.push(uv);
@@ -951,6 +961,34 @@ export class AppState {
     }
   }
 
+  async updateGeminiTrajectory(commands: string) {
+    const cmds = commands.split(";");
+    const points3D = [];
+    const home = { x: 110, y: 0, z: 70, type: "home" };
+    points3D.push(home);
+
+    for (const cmd of cmds) {
+      const c = cmd.trim();
+      if (c.toLowerCase().startsWith("move")) {
+        const xMatch = c.match(/x\s*=\s*([-+]?\d*\.?\d+)/i);
+        const yMatch = c.match(/y\s*=\s*([-+]?\d*\.?\d+)/i);
+        const zMatch = c.match(/z\s*=\s*([-+]?\d*\.?\d+)/i);
+        if (xMatch && yMatch && zMatch) {
+          points3D.push({ x: parseFloat(xMatch[1]), y: parseFloat(yMatch[1]), z: parseFloat(zMatch[1]), type: "waypoint" });
+        }
+      }
+    }
+    points3D.push({ ...home, type: "home" });
+
+    const promises = points3D.map(async (p) => {
+      const uv = await this.convertWorldToImage(p.x, p.y, p.z);
+      return uv ? { ...uv, ...p } : null;
+    });
+    
+    const results = await Promise.all(promises);
+    this.geminiTrajectoryPoints = results.filter((p) => p !== null);
+  }
+
   async parseGeminiVisuals(logs: any[]) {
     // Detections
     const latestLog = logs.length > 0 ? logs[0] : null;
@@ -968,34 +1006,11 @@ export class AppState {
     }
 
     // Trajectory
+    if (this.geminiLive) return;
+
     const moveLog = logs.find((l: any) => l.tool === "execute_sequence");
     if (moveLog && moveLog.args?.commands) {
-      const cmds = moveLog.args.commands.split(";");
-      const points3D = [];
-      const home = { x: 110, y: 0, z: 70, type: "home" };
-      points3D.push(home);
-
-      for (const cmd of cmds) {
-        const c = cmd.trim();
-        if (c.toLowerCase().startsWith("move")) {
-          const xMatch = c.match(/x\s*=\s*([-+]?\d*\.?\d+)/i);
-          const yMatch = c.match(/y\s*=\s*([-+]?\d*\.?\d+)/i);
-          const zMatch = c.match(/z\s*=\s*([-+]?\d*\.?\d+)/i);
-          if (xMatch && yMatch && zMatch) {
-            points3D.push({ x: parseFloat(xMatch[1]), y: parseFloat(yMatch[1]), z: parseFloat(zMatch[1]), type: "waypoint" });
-          }
-        }
-      }
-      points3D.push({ ...home, type: "home" });
-
-      const points2D = [];
-      for (const p of points3D) {
-        const uv = await this.convertWorldToImage(p.x, p.y, p.z);
-        if (uv) {
-          points2D.push({ ...uv, ...p });
-        }
-      }
-      this.geminiTrajectoryPoints = points2D;
+      await this.updateGeminiTrajectory(moveLog.args.commands);
     } else {
       this.geminiTrajectoryPoints = [];
     }
@@ -1094,6 +1109,10 @@ export class AppState {
             const entry = { source: "tool" as const, toolName: name, toolArgs: args, timestamp, toolResult: undefined as string | undefined };
             this.geminiLiveLog.push(entry);
 
+            if (name === "execute_sequence" && args.commands) {
+                await this.updateGeminiTrajectory(args.commands);
+            }
+
             try {
                 const res = await fetch("/mcp", {
                     method: "POST",
@@ -1101,11 +1120,20 @@ export class AppState {
                     headers: { "Content-Type": "application/json" },
                 });
                 const result = await res.json();
+
+                if (name === "execute_sequence") {
+                    this.geminiTrajectoryPoints = [];
+                }
+
                 const resultStr = JSON.stringify(result);
                 const targetEntry = this.geminiLiveLog.find(e => e.timestamp === timestamp && e.toolName === name);
                 if (targetEntry) targetEntry.toolResult = resultStr;
                 return resultStr;
             } catch (e: any) {
+                if (name === "execute_sequence") {
+                    this.geminiTrajectoryPoints = [];
+                }
+
                 const errStr = `Error: ${e.message}`;
                 const targetEntry = this.geminiLiveLog.find(e => e.timestamp === timestamp && e.toolName === name);
                 if (targetEntry) targetEntry.toolResult = errStr;
