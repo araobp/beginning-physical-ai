@@ -110,8 +110,8 @@ export class GeminiLiveClient {
                         // 接続確立後にマイク入力のストリーミングを開始
                         this.startAudioStream();
                     },
-                    onmessage: (msg: any) => {
-                        this.handleMessage(msg);
+                    onmessage: async (msg: any) => {
+                        await this.handleMessage(msg);
                     },
                     onclose: () => {
                         console.log("Gemini Live WebSocket Closed");
@@ -348,7 +348,7 @@ export class GeminiLiveClient {
     /**
      * サーバーからのメッセージを処理し、適切なアクション（音声再生、テキスト表示、ツール呼び出しなど）を実行します。
      */
-    private handleMessage(msg: any) {
+    private async handleMessage(msg: any) {
         console.log("GeminiLiveClient: handleMessage", msg);
         const serverContent = msg.serverContent;
 
@@ -378,10 +378,14 @@ export class GeminiLiveClient {
                     }
                 }
             }
-        } else if (msg.toolCall) {
+        }
+
+        if (msg.toolCall) {
             // ツール呼び出し要求の処理
-            this.handleToolCall(msg.toolCall);
-        } else if (msg.userQuery) {
+            await this.handleToolCall(msg.toolCall);
+        }
+
+        if (msg.userQuery) {
             // ユーザーの音声認識結果を処理
             this.handleUserQuery(msg.userQuery);
         }
@@ -408,22 +412,23 @@ export class GeminiLiveClient {
 
         for (const call of functionCalls) {
             console.log("Tool call:", call.name, call.args);
-            let result = {};
+            let result: any;
 
             // クライアント側で定義されたツール実行関数を呼び出し
             // +page.svelteなどで定義されたコールバックが実行されます
             if (this.config.onToolCall) {
-                result = await this.config.onToolCall(call.name, call.args);
+                const toolArgs = call.args || {};
+                result = await this.config.onToolCall(call.name, toolArgs);
             }
 
-            if (result === undefined) result = { result: "ok" };
+            if (result === undefined) {
+                result = { result: "ok" };
+            }
 
             toolResponses.push({
                 id: call.id,
                 name: call.name,
-                response: {
-                    result: result
-                }
+                response: result
             });
         }
 

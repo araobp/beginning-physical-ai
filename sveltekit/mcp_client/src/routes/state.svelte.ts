@@ -129,7 +129,7 @@ export class AppState {
   ppPickPoint = $state<any>(null);
   ppPlacePoint = $state<any>(null);
   ppExecuting = $state(false);
-  ppPickZ = $state(20);
+  ppPickZ = $state(10);
   ppPlaceZ = $state(30);
   ppSafetyZ = $state(70);
   ppLive = $state(false);
@@ -1125,10 +1125,27 @@ export class AppState {
                     this.geminiTrajectoryPoints = [];
                 }
 
+                // ログには生のレスポンスを保存
                 const resultStr = JSON.stringify(result);
                 const targetEntry = this.geminiLiveLog.find(e => e.timestamp === timestamp && e.toolName === name);
                 if (targetEntry) targetEntry.toolResult = resultStr;
-                return resultStr;
+
+                // Geminiに返す結果を整形する
+                // content配列からテキストを抽出し、それがJSONであればパースする。
+                if (result.content && Array.isArray(result.content)) {
+                    const textPart = result.content.find((c: any) => c.type === "text" && c.text)?.text;
+                    if (textPart) {
+                        try {
+                            // テキストがJSON文字列ならパースして返す
+                            return JSON.parse(textPart);
+                        } catch (e) {
+                            // JSONでなければテキストを結果として返す
+                            return { result: textPart };
+                        }
+                    }
+                }
+                // contentがない、またはテキストパートがない場合は、汎用的な成功応答を返す
+                return { result: "Tool executed successfully." };
             } catch (e: any) {
                 if (name === "execute_sequence") {
                     this.geminiTrajectoryPoints = [];
@@ -1137,7 +1154,7 @@ export class AppState {
                 const errStr = `Error: ${e.message}`;
                 const targetEntry = this.geminiLiveLog.find(e => e.timestamp === timestamp && e.toolName === name);
                 if (targetEntry) targetEntry.toolResult = errStr;
-                return errStr;
+                return { error: errStr };
             }
         }
       });
