@@ -29,6 +29,7 @@
 7. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その６：VLA検証準備編](https://qiita.com/araobp/items/f4a5af993a2fe730f373)
 8. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その７：VLAもどき制作編](https://qiita.com/araobp/items/c47de8e8f11721750e69)
 9. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その８：VLAもどき評価編](https://qiita.com/araobp/items/c6f1180d817c66834cca)
+10. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その９：Gemini Live編](https://qiita.com/araobp/items/0ee6f2646cb9bd9c7102)
 
 ## YouTube投稿
 1. [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://youtu.be/fcqtPaY-7mA)
