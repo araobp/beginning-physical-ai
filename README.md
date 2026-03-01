@@ -37,6 +37,7 @@
 3. [Controlling the Cheapest 4-DoF Robot Arm #1: Manual Operation](https://youtu.be/8ao8iRgKlmQ)
 4. [Controlling the Cheapest 4-DoF Robot Arm #2: Semi-autonomous Pick and Place](https://youtu.be/MY3FegzB9K4)
 5. [Controlling the Cheapest 4-DoF Robot Arm #3: VLA with gemini-2.5-flash (Gemini CLI)](https://youtu.be/BLxZWXGaDsE)
+6. [Controlling the Cheapest 4-DoF Robot Arm #4: Gemini Live Native Audio](https://youtu.be/KcB9Z4o9C7U)
 
 ## おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい ソースコード
 
