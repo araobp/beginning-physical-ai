@@ -29,6 +29,7 @@
 7. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その６：VLA検証準備編](https://qiita.com/araobp/items/f4a5af993a2fe730f373)
 8. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その７：VLAもどき制作編](https://qiita.com/araobp/items/c47de8e8f11721750e69)
 9. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その８：VLAもどき評価編](https://qiita.com/araobp/items/c6f1180d817c66834cca)
+10. [おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい 〜 その９：Gemini Live編](https://qiita.com/araobp/items/0ee6f2646cb9bd9c7102)
 
 ## YouTube投稿
 1. [Lチカから始めるフィジカルAI: Gemini Live + SvelteKit + Arduino UNO](https://youtu.be/fcqtPaY-7mA)
@@ -36,6 +37,7 @@
 3. [Controlling the Cheapest 4-DoF Robot Arm #1: Manual Operation](https://youtu.be/8ao8iRgKlmQ)
 4. [Controlling the Cheapest 4-DoF Robot Arm #2: Semi-autonomous Pick and Place](https://youtu.be/MY3FegzB9K4)
 5. [Controlling the Cheapest 4-DoF Robot Arm #3: VLA with gemini-2.5-flash (Gemini CLI)](https://youtu.be/BLxZWXGaDsE)
+6. [Controlling the Cheapest 4-DoF Robot Arm #4: Gemini Live Native Audio](https://youtu.be/KcB9Z4o9C7U)
 
 ## おもちゃのロボットアームでフィジカルAIを網羅的に勉強したい ソースコード
 
