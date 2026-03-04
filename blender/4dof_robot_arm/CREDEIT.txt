@@ -1,0 +1,9 @@
+このフォルダ内の3Dモデルは以下のサイトより取得しました：
+
+https://grabcad.com/library/robot-arm-4-dof-1
+
+この3Dモデルの作者は以下です：
+https://grabcad.com/sidahmed.mebarki-1
+
+以下に、Solidworks向けチュートリアルがあります：
+https://grabcad.com/tutorials/robot-arm-4dof-assy
