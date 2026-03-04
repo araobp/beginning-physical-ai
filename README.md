@@ -48,7 +48,7 @@
 
 ### フィジカルAIシステム（開発中）
 
-100%バイブコーディングで開発したが、一部、MCPのコンセプトから外れた処理が見られる。生成されたコードを読みながら処理を最適化中。
+100%バイブコーディングで開発。
 
 - [Robot Controller](https://github.com/araobp/beginning-physical-ai/tree/main/arduino/robot_controller)
 - [MCP Server](https://github.com/araobp/beginning-physical-ai/tree/main/python/mcp_server)
