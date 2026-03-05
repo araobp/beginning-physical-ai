@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { GoogleGenAI } from '@google/genai';
 
-// The prompt for object detection with Gemini
+// Geminiに物体検出を指示するためのプロンプト
 const visionPrompt = `
 Analyze the provided image and identify all objects on the table.
 For each object, provide the following information in a JSON array format:
@@ -29,47 +29,54 @@ Only output the JSON object. Do not include any other text or markdown formattin
 `;
 
 /**
- * Handles POST requests to detect objects in an image using Gemini Vision.
+ * Gemini Visionを使用して画像内の物体を検出するためのPOSTリクエストを処理します。
  */
 export async function POST({ request }) {
+  // 環境変数からGemini APIキーを取得します。
   const apiKey = process.env.GEMINI_API_KEY;
 
+  // APIキーがサーバーに設定されていない場合、エラーを返します。
   if (!apiKey) {
     return json({ error: 'GEMINI_API_KEY is not set on the server.' }, { status: 500 });
   }
 
   try {
+    // リクエストボディから画像データとモデル名を取得します。
     const { image, model: modelName } = await request.json();
 
+    // 画像データまたはモデル名が不足している場合、エラーを返します。
     if (!image || !modelName) {
       return json({ error: 'Image data and model name are required.' }, { status: 400 });
     }
 
+    // GoogleGenAIクライアントを初期化します。
     const client = new GoogleGenAI({ apiKey });
+    // Geminiモデルにコンテンツ生成をリクエストします。
     const result = await client.models.generateContent({
       model: modelName,
       contents: [
         {
           parts: [
             { text: visionPrompt },
-            { inlineData: { mimeType: 'image/jpeg', data: image.split(',')[1] } }
+            // Base64エンコードされた画像データからヘッダー部分を除去して渡します。
+            { inlineData: { mimeType: 'image/jpeg', data: image.split(',')[1] } },
           ]
         }
       ]
     });
 
-    // @google/genai では result が直接レスポンス情報を持つ場合があるため、
-    // result.text() が存在すればそれを使い、なければ result.response.text() を試みる
+    // Gemini APIからのレスポンスのテキスト部分を取得します。
+    // @google/genaiのバージョンによってレスポンスの構造が異なる場合に対応します。
     let text = "";
     if (result && typeof (result as any).text !== 'undefined') {
       text = (result as any).text || "";
     } else if ((result as any).response && typeof (result as any).response.text === 'function') {
       text = (result as any).response.text();
     } else {
-      throw new Error("Invalid response structure from Gemini API");
+      throw new Error("Gemini APIからのレスポンス構造が無効です");
     }
 
-    // Markdownのコードブロック記法を削除し、JSON部分のみを抽出する
+    // Geminiからの応答に含まれる可能性のあるMarkdownのコードブロック記法を削除します。
     let cleanText = text.replace(/```json\n?|```/g, '');
     const firstBrace = cleanText.indexOf('{');
     const lastBrace = cleanText.lastIndexOf('}');
@@ -77,10 +84,11 @@ export async function POST({ request }) {
       cleanText = cleanText.substring(firstBrace, lastBrace + 1);
     }
 
+    // 整形されたテキストをJSONとしてパースします。
     const detections = JSON.parse(cleanText);
     return json(detections);
   } catch (error: any) {
-    console.error('Error in Gemini API call:', error);
-    return json({ error: error.message || 'Failed to detect objects.' }, { status: 500 });
+    console.error('Gemini API呼び出しでエラーが発生しました:', error);
+    return json({ error: error.message || '物体の検出に失敗しました。' }, { status: 500 });
   }
 }

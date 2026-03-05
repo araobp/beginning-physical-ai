@@ -520,9 +520,9 @@ class VisionSystem:
         color_name = "unknown"
         if h < 5 or h >= 179:
             color_name = "red"
-        elif h < 45:
+        elif h < 35:
             color_name = "orange"
-        elif h < 70:
+        elif h < 60:
             color_name = "yellow"
         elif h < 95:
             color_name = "green"

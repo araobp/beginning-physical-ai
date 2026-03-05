@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AppState } from "../state.svelte";
   import { getColorForObject, getTextColor } from "$lib/utils";
+  import LiveButton from "./LiveButton.svelte";
 
   let { appState }: { appState: AppState } = $props();
   let reasoningPathLogElement: HTMLElement | null = null;
@@ -26,12 +27,11 @@
 <div class="container-fluid mt-1 mb-1">
   <div class="row mb-3">
     <div class="col-12 d-flex align-items-center gap-3">
-      <button class="btn {appState.geminiLive ? 'btn-danger' : 'btn-outline-danger'}"
-        onclick={() => appState.toggleGeminiLive()}
-        class:spaceship-glow={appState.currentTheme === 'spaceship' && appState.geminiLive}
-      >
-        {appState.geminiLive ? appState.t.stop_live : appState.t.live}
-      </button>
+      <LiveButton
+        appState={appState}
+        isLive={appState.geminiLive}
+        onToggle={() => appState.toggleGeminiLive()}
+      />
       <span class="text-muted">{appState.t.gemini_live_monitor_desc}</span>
     </div>
   </div>
@@ -315,10 +315,6 @@
 
   :global(.theme-spaceship) .special-bg {
     background-color: #00251e; /* Dark Teal */
-  }
-
-  .spaceship-glow {
-    text-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
   }
 
   /* Animations */

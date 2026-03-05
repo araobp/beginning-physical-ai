@@ -1,14 +1,17 @@
 import { env } from "$env/dynamic/public";
 import { GeminiLiveClient } from "$lib/gemini";
 
+// MCPサーバーが提供するツールのインターフェース定義
 export interface Tool {
   name: string;
   description?: string;
   inputSchema: Record<string, any>;
 }
 
+// 対応言語の型定義
 export type Lang = "ja" | "en";
 
+// UIの多言語対応用の翻訳テキスト
 const translations = {
   ja: {
     title: "最も安い4軸ロボットアーム",
@@ -101,83 +104,80 @@ const translations = {
   },
 };
 
+// アプリケーション全体の状態を管理するクラス
 export class AppState {
-  // Tools
-  tools = $state<Tool[]>([]);
-  error = $state<string | null>(null);
-  selectedTool = $state<Tool | null>(null);
-  toolArgs = $state<Record<string, any>>({});
-  executionResult = $state<{ text?: string; image?: string } | null>(null);
-  isExecuting = $state(false);
+  // --- ツール関連の状態 ---
+  tools = $state<Tool[]>([]); // 利用可能なツールの一覧
+  error = $state<string | null>(null); // ツール読み込み時のエラーメッセージ
+  selectedTool = $state<Tool | null>(null); // 現在選択されているツール
+  toolArgs = $state<Record<string, any>>({}); // 選択されたツールの引数
+  executionResult = $state<{ text?: string; image?: string } | null>(null); // ツールの実行結果
+  isExecuting = $state(false); // ツールが実行中かどうかのフラグ
 
-  // Camera
-  cameraImage = $state<string | null>(null);
-  capturing = $state(false);
-  tfReady = $state(false);
-  detectionModel = $state("yolo11n");
-  detecting = $state(false);
-  targetMarker = $state<{ x: number; y: number } | null>(null);
-  targetImageCoords = $state<{ u: number; v: number } | null>(null);
-  targetWorldCoords = $state<{ x: number; y: number } | null>(null);
-  detectedObjects = $state<any[]>([]);
-  visualizeAxes = $state(true);
-  detectionConfidence = $state(0.7);
+  // --- カメラ・画像認識関連の状態 ---
+  cameraImage = $state<string | null>(null); // カメラから取得した静止画像（Base64）
+  capturing = $state(false); // 静止画をキャプチャ中かどうかのフラグ
+  tfReady = $state(false); // TensorFlow.jsが利用可能かどうかのフラグ
+  detectionModel = $state("yolo11n"); // 使用する物体検出モデル
+  detecting = $state(false); // 物体検出中かどうかのフラグ
+  targetMarker = $state<{ x: number; y: number } | null>(null); // ユーザーがクリックした位置のマーカー（UI用）
+  targetImageCoords = $state<{ u: number; v: number } | null>(null); // クリックされた画像のピクセル座標
+  targetWorldCoords = $state<{ x: number; y: number } | null>(null); // ピクセル座標から変換されたロボットのワールド座標
+  detectedObjects = $state<any[]>([]); // 静止画上で検出されたオブジェクトのリスト
+  visualizeAxes = $state(true); // 画像に座標軸を可視化するかのフラグ
+  detectionConfidence = $state(0.7); // 物体検出の信頼度の閾値
 
-  // Pick & Place
-  ppImage = $state<string | null>(null);
-  ppCapturing = $state(false);
-  ppPickPoint = $state<any>(null);
-  ppPlacePoint = $state<any>(null);
-  ppExecuting = $state(false);
-  ppPickZ = $state(10);
-  ppPlaceZ = $state(30);
-  ppSafetyZ = $state(70);
-  ppLive = $state(false);
-  ppShowDetections = $state(false);
-  ppDetections = $state<any[]>([]);
-  ppDetectionPolling = $state(false);
-  ppDetectionTimeout: any = null;
-  ppShowTrajectory = $state(false);
-  ppHoveredObject = $state<any>(null);
-  ppTrajectoryPoints = $state<{ u: number; v: number }[]>([]);
-  ppImageDim = $state<{ w: number; h: number } | null>(null);
-  joypadLeft = $state({ x: 0, y: 0 });
-  joypadRight = $state({ x: 0, y: 0 });
-  lastPPMousePosition = $state<{ x: number; y: number } | null>(null);
+  // --- Pick & Placeタブ関連の状態 ---
+  ppImage = $state<string | null>(null); // Pick & Place用のライブストリーム画像URLまたは静止画
+  ppCapturing = $state(false); // (未使用の可能性)
+  ppPickPoint = $state<any>(null); // ピックアップする地点の座標情報
+  ppPlacePoint = $state<any>(null); // プレースする地点の座標情報
+  ppExecuting = $state(false); // Pick & Placeシーケンスが実行中かどうかのフラグ
+  ppPickZ = $state(10); // ピックアップ時のZ座標 (mm)
+  ppPlaceZ = $state(30); // プレース時のZ座標 (mm)
+  ppSafetyZ = $state(70); // 安全な高さのZ座標 (mm)
+  ppLive = $state(false); // ライブストリーム表示中かどうかのフラグ
+  ppShowDetections = $state(false); // ライブストリーム上で物体検出を有効にするかのフラグ
+  ppDetections = $state<any[]>([]); // ライブストリーム上で検出されたオブジェクト
+  ppDetectionPolling = $state(false); // 物体検出のポーリング中かどうかのフラグ
+  ppDetectionTimeout: any = null; // 物体検出ポーリングのタイマーID
+  ppShowTrajectory = $state(false); // Pick & Placeの軌道を表示するかのフラグ
+  ppHoveredObject = $state<any>(null); // マウスがホバーしているオブジェクト
+  ppTrajectoryPoints = $state<{ u: number; v: number }[]>([]); // 表示用の軌道（2D画像座標）
+  ppImageDim = $state<{ w: number; h: number } | null>(null); // (未使用の可能性)
+  joypadLeft = $state({ x: 0, y: 0 }); // 左ジョイパッドの状態
+  joypadRight = $state({ x: 0, y: 0 }); // 右ジョイパッドの状態
+  lastPPMousePosition = $state<{ x: number; y: number } | null>(null); // Pick & Place画像上での最後のマウス位置
+  robotStatus = $state<any>(null); // ロボットのステータス (TCP, Joints)
   
-  // Gemini Monitor
-  geminiLive = $state(false);
-  cliMonitor = $state(false);
-  geminiLogs = $state<any[]>([]);
-  geminiDetections = $state<any[]>([]);
-  geminiTrajectoryPoints = $state<any[]>([]);
-  geminiImageDim = $state<{ w: number; h: number } | null>(null);
-  geminiClient = $state<GeminiLiveClient | null>(null);
-  geminiMicLevel = $state(0);
-  geminiSpeakerLevel = $state(0);
-  geminiStatus = $state("Disconnected");
-  geminiLiveLog = $state<{
-    source: "user" | "model" | "tool";
-    content?: string;
-    toolName?: string;
-    toolArgs?: any;
-    toolResult?: string;
-    timestamp: number;
-  }[]>([]);
-  geminiInterimTranscript = $state("");
-  cliMonitorLoaded = $state(false);
-  cliMonitorImageSrc = $state<string | null>(null);
-  geminiLiveMonitorLoaded = $state(false);
-  geminiLiveMonitorImageSrc = $state<string | null>(null);
-  isPollingLogs = false;
+  // --- Geminiモニター関連の状態 ---
+  geminiLive = $state(false); // Gemini Liveが有効かどうかのフラグ
+  cliMonitor = $state(false); // Gemini CLIモニターが有効かどうかのフラグ
+  geminiLogs = $state<any[]>([]); // MCPサーバーから取得したツール実行ログ
+  geminiDetections = $state<any[]>([]); // Geminiモニターで表示する検出オブジェクト
+  geminiTrajectoryPoints = $state<any[]>([]); // Geminiモニターで表示する軌道
+  geminiImageDim = $state<{ w: number; h: number } | null>(null); // (未使用の可能性)
+  geminiClient = $state<GeminiLiveClient | null>(null); // Gemini Liveクライアントのインスタンス
+  geminiMicLevel = $state(0); // マイクの音量レベル
+  geminiSpeakerLevel = $state(0); // スピーカーの音量レベル
+  geminiStatus = $state("Disconnected"); // Gemini Liveの接続状態
+  geminiLiveLog = $state<any[]>([]); // Gemini Liveの対話ログ
+  geminiInterimTranscript = $state(""); // Gemini Liveの音声認識の中間結果
+  cliMonitorLoaded = $state(false); // CLIモニターの画像が読み込まれたかのフラグ
+  cliMonitorImageSrc = $state<string | null>(null); // CLIモニターの画像ソースURL
+  geminiLiveMonitorLoaded = $state(false); // Gemini Liveモニターの画像が読み込まれたかのフラグ
+  geminiLiveMonitorImageSrc = $state<string | null>(null); // Gemini Liveモニターの画像ソースURL
+  isPollingLogs = $state(false); // ログのポーリング中かどうかのフラグ
 
-  // Settings
-  currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "spaceship");
-  currentLang = $state<Lang>((env.PUBLIC_MCP_LANGUAGE as Lang) || "ja");
+  // --- 設定関連の状態 ---
+  currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "spaceship"); // 現在のUIテーマ
+  currentLang = $state<Lang>((env.PUBLIC_MCP_LANGUAGE as Lang) || "ja"); // 現在の言語
 
+  // 派生状態: 現在の言語に応じた翻訳テキスト
   t = $derived(translations[this.currentLang]);
 
   constructor() {
+    // $effect: currentThemeが変更されたときにテーマクラスを<body>に適用する
     $effect(() => {
       if (typeof window !== "undefined") {
         document.body.classList.remove("theme-default", "theme-spaceship");
@@ -189,9 +189,8 @@ export class AppState {
       }
     });
 
+    // $effect: 軌道表示が有効になったときに軌道を更新する
     $effect(() => {
-      // This effect handles trajectory updates.
-      // It's wrapped in an async IIFE to handle the async nature of updateTrajectory.
       (async () => {
         if (this.ppShowTrajectory) {
           try {
@@ -205,20 +204,21 @@ export class AppState {
       })();
     });
 
+    // $effect: Geminiモニターが有効になったときにログのポーリングを開始/停止する
     $effect(() => {
       if (this.geminiLive || this.cliMonitor) {
         if (!this.isPollingLogs) {
           this.pollGeminiLogs();
         }
       } else {
-        // Stop polling if both are false
+        // 両方のモニターがオフになったらポーリングを停止し、表示をクリアする
         this.isPollingLogs = false;
-        // Clear visuals when monitors are off
         this.geminiDetections = [];
         this.geminiTrajectoryPoints = [];
       }
     });
 
+    // $effect: Pick & Placeのライブ検出が有効になったときに検出のポーリングを開始/停止する
     $effect(() => {
       if (this.ppShowDetections && this.ppLive) {
         clearTimeout(this.ppDetectionTimeout);
@@ -230,13 +230,16 @@ export class AppState {
     });
   }
 
+  // アプリケーションの初期化処理
   async init() {
-    await this.loadTools();
-    await this.executeSingleCommand("move x=110 y=0 z=70 s=50");
-    this.loadTFJS();
-    this.startJoypadPolling();
+    await this.loadTools(); // ツール一覧を読み込む
+    await this.executeSingleCommand("move x=110 y=0 z=70 s=50"); // ロボットを初期位置に移動
+    this.loadTFJS(); // TensorFlow.jsをロード
+    this.startJoypadPolling(); // ジョイパッドの状態ポーリングを開始
+    this.startRobotStatusPolling(); // ロボットステータスのポーリングを開始
   }
 
+  // TensorFlow.jsとCOCO-SSDモデルを動的にロードする
   loadTFJS() {
     if (typeof document === 'undefined') return;
     const tfScript = document.createElement("script");
@@ -247,13 +250,14 @@ export class AppState {
       cocoSsdScript.src = "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd";
       cocoSsdScript.async = true;
       cocoSsdScript.onload = () => {
-        this.tfReady = true;
+        this.tfReady = true; // ロード完了フラグを立てる
       };
       document.head.appendChild(cocoSsdScript);
     };
     document.head.appendChild(tfScript);
   }
 
+  // MCPサーバーから利用可能なツールの一覧を読み込む
   async loadTools() {
     try {
       const res = await fetch("/mcp", {
@@ -272,6 +276,7 @@ export class AppState {
     }
   }
 
+  // 単一のコマンド文字列をMCPサーバーに送信して実行する
   async executeSingleCommand(cmd: string) {
     try {
       await fetch("/mcp", {
@@ -288,8 +293,10 @@ export class AppState {
     }
   }
 
+  // カメラから静止画をキャプチャする
   async captureImage() {
     this.capturing = true;
+    // 関連する状態をリセット
     this.targetMarker = null;
     this.targetImageCoords = null;
     this.targetWorldCoords = null;
@@ -318,6 +325,7 @@ export class AppState {
     }
   }
 
+  // MCPサーバーからの画像を含むレスポンスをパースして画像データを抽出する
   parseImageResult(result: any, callback: (img: string) => void) {
     if (result.content && Array.isArray(result.content)) {
       for (const content of result.content) {
@@ -338,9 +346,10 @@ export class AppState {
     }
   }
 
+  // 選択されたモデルを使用して物体検出を実行する
   async detectObjects() {
     if (this.detectionModel === "tensorflow.js") {
-      // TFJS logic (simplified for brevity, assume similar to original)
+      // TensorFlow.jsを使用したクライアントサイドでの検出
       if (!this.tfReady || !this.cameraImage) {
         alert("TensorFlow.js is not ready or no image has been captured.");
         return;
@@ -354,6 +363,7 @@ export class AppState {
         // @ts-ignore
         const model = await window.cocoSsd.load();
         const predictions = await model.detect(imgElement);
+        // 検出結果をアプリの状態に保存
         this.detectedObjects = predictions.map((p: any) => ({
           label: p.class,
           box_2d: [
@@ -370,7 +380,7 @@ export class AppState {
         this.detecting = false;
       }
     } else if (this.detectionModel === "yolo11n") {
-        // YOLO logic
+        // YOLOv11n (MCPサーバーサイド) を使用した検出
         this.detecting = true;
         this.detectedObjects = [];
         try {
@@ -390,6 +400,7 @@ export class AppState {
                 headers: { "Content-Type": "application/json" },
             });
             const result = await res.json();
+            // レスポンスから画像と検出結果をパース
             if (result.content && Array.isArray(result.content)) {
                 for (const content of result.content) {
                     if (content.type === "text") {
@@ -417,7 +428,7 @@ export class AppState {
             this.detecting = false;
         }
     } else {
-        // Gemini Vision logic
+        // Gemini Vision (サーバーサイド) を使用した検出
         this.detecting = true;
         this.detectedObjects = [];
         this.targetMarker = null;
@@ -425,7 +436,7 @@ export class AppState {
         this.targetWorldCoords = null;
 
         try {
-            // 1. MCPサーバーから最新画像を取得 (get_live_imageツールを使用)
+            // 1. MCPサーバーから最新画像を取得
             const resImg = await fetch("/mcp", {
                 method: "POST",
                 body: JSON.stringify({
@@ -461,7 +472,7 @@ export class AppState {
                 throw new Error("Failed to capture image from robot camera.");
             }
 
-            // 2. Node.jsサーバー経由でGemini APIを呼び出し
+            // 2. SvelteKitのサーバーエンドポイント経由でGemini APIを呼び出し
             const resGemini = await fetch("/api/gemini-proxy", {
                 method: "POST",
                 body: JSON.stringify({
@@ -484,6 +495,7 @@ export class AppState {
                 throw new Error(resultGemini.error);
             }
 
+            // 検出結果を状態に保存
             if (resultGemini.detections && Array.isArray(resultGemini.detections)) {
                 this.detectedObjects = resultGemini.detections.map((o: any) => ({
                     ...o,
@@ -501,6 +513,7 @@ export class AppState {
     }
   }
 
+  // 画像のピクセル座標をワールド座標に変換する
   async convertImageCoordsToWorld(u: number, v: number) {
     try {
       const res = await fetch("/mcp", {
@@ -527,10 +540,12 @@ export class AppState {
     }
   }
 
+  // ツール実行用のモーダルを開く
   openToolModal(tool: Tool) {
     this.selectedTool = tool;
     this.toolArgs = {};
     this.executionResult = null;
+    // ツールの入力スキーマから引数の初期値を設定
     if (tool.inputSchema?.properties) {
       for (const key in tool.inputSchema.properties) {
         const prop = tool.inputSchema.properties[key];
@@ -545,6 +560,7 @@ export class AppState {
     }
   }
 
+  // 選択されたツールを実行する
   async executeTool() {
     if (!this.selectedTool) return;
     this.isExecuting = true;
@@ -564,6 +580,7 @@ export class AppState {
       let text = "";
       let image: string | undefined = undefined;
 
+      // 既存の汎用的なレスポンスパース処理
       if (result.content && Array.isArray(result.content)) {
         for (const content of result.content) {
           if (content.type === "text") {
@@ -584,6 +601,7 @@ export class AppState {
       } else {
         text = JSON.stringify(result, null, 2);
       }
+
       this.executionResult = { text: text.trim(), image };
     } catch (e: any) {
       this.executionResult = { text: `Error: ${e.message}` };
@@ -592,6 +610,7 @@ export class AppState {
     }
   }
 
+  // Pick & Placeシーケンスを実行する
   async runPickAndPlace() {
     if (!this.ppPickPoint || !this.ppPlacePoint) return;
     this.ppExecuting = true;
@@ -600,6 +619,7 @@ export class AppState {
     const placeZ = Number(this.ppPlaceZ ?? 30);
     const safetyZ = Number(this.ppSafetyZ ?? 70);
 
+    // 実行するコマンドのシーケンスを定義
     const cmds = [
       "grip open",
       `move z=${safetyZ} s=100`,
@@ -613,10 +633,10 @@ export class AppState {
       "grip open",
       "delay t=1000",
       `move z=${safetyZ} s=100`,
-      "move x=110 y=0 z=70 s=50",
+      "move x=110 y=0 z=70 s=50", // ホームポジションに戻る
     ];
 
-    // Execute commands sequentially
+    // コマンドを順次実行
     (async () => {
       try {
         for (const cmd of cmds) {
@@ -631,12 +651,13 @@ export class AppState {
     })();
   }
 
+  // Pick & Placeのポイントをクリアする
   clearPPPoints() {
     this.ppPickPoint = null;
     this.ppPlacePoint = null;
   }
 
-  // Clear detections and related data
+  // 検出結果や追跡情報など、関連する視覚情報をクリアする
   clearDetectionsAndTracking() {
     this.detectedObjects = [];
     this.targetMarker = null;
@@ -653,13 +674,14 @@ export class AppState {
     this.geminiLiveMonitorImageSrc = null;
   }
 
+  // Pick & Place画像上でのマウス移動イベントを処理する
   handlePPMouseMove(event: MouseEvent) {
     const target = event.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
 
-    // Normalize to 0-1000 for hover detection
+    // 座標を0-1000の範囲に正規化してホバー検出に使用
     const mx = (x / rect.width) * 1000;
     const my = (y / rect.height) * 1000;
 
@@ -667,26 +689,27 @@ export class AppState {
     this.updatePPHover();
   }
 
+  // マウスがPick & Place画像から離れたときの処理
   handlePPMouseLeave() {
     this.lastPPMousePosition = null;
     this.ppHoveredObject = null;
   }
 
-  // Pick & Place Logic
+  // Pick & Placeのライブストリーム表示を切り替える
   async toggleLive() {
     this.ppLive = !this.ppLive;
     if (this.ppLive) {
       this.clearDetectionsAndTracking();
       this.ppDetections = [];
+      // MJPEGストリームのURLを設定（キャッシュを避けるためにタイムスタンプを追加）
       this.ppImage = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
     } else {
       this.ppImage = null;
       this.clearDetectionsAndTracking();
     }
-
-    
   }
 
+  // ライブストリーム上で物体検出を定期的に実行（ポーリング）
   async pollDetections() {
     if (!this.ppLive || !this.ppShowDetections || this.ppDetectionPolling) return;
     this.ppDetectionPolling = true;
@@ -706,8 +729,9 @@ export class AppState {
         });
         clearTimeout(timeoutId);
         const result = await res.json();
-        if (!this.ppLive) return;
-        // Parse result and update ppDetections
+        if (!this.ppLive) return; // ポーリング中にライブが停止された場合
+
+        // レスポンスから検出結果をパース
         if (result.content) {
             const text = result.content.find((c: any) => c.type === "text")?.text;
             if (text) {
@@ -721,12 +745,14 @@ export class AppState {
     } catch (e) { console.error(e); }
     finally {
         this.ppDetectionPolling = false;
+        // ライブ検出が有効な限り、次のポーリングをスケジュール
         if (this.ppLive && this.ppShowDetections) {
-          this.ppDetectionTimeout = setTimeout(() => this.pollDetections(), 0);
+          this.ppDetectionTimeout = setTimeout(() => this.pollDetections(), 0); // 可能な限り早く次のリクエストを送る
         }
     }
   }
 
+  // マウスカーソルがどの検出オブジェクト上にあるかを更新する
   updatePPHover() {
     if (!this.lastPPMousePosition || !this.ppShowDetections) {
       this.ppHoveredObject = null;
@@ -734,7 +760,8 @@ export class AppState {
     }
     const { x: mx, y: my } = this.lastPPMousePosition;
     let found = null;
-    // Iterate backwards to find the top-most object
+
+    // 配列を逆順にループして、最も手前（描画順で上）のオブジェクトを見つける
     for (let i = this.ppDetections.length - 1; i >= 0; i--) {
       const obj = this.ppDetections[i];
       const [ymin, xmin, ymax, xmax] = obj.box_2d;
@@ -746,6 +773,7 @@ export class AppState {
     this.ppHoveredObject = found;
   }
 
+  // Pick & Placeの軌道を計算して更新する
   async updateTrajectory() {
     if (!this.ppPickPoint || !this.ppPlacePoint) {
         this.ppTrajectoryPoints = [];
@@ -753,6 +781,7 @@ export class AppState {
     }
     const hasTool = this.tools.some((t) => t.name === "convert_coordinates");
     if (!hasTool) {
+      // 座標変換ツールがない場合は、単純に2点を結ぶ線を描画
       this.ppTrajectoryPoints = [
         { u: this.ppPickPoint.u, v: this.ppPickPoint.v },
         { u: this.ppPlacePoint.u, v: this.ppPlacePoint.v },
@@ -760,6 +789,7 @@ export class AppState {
       return;
     }
 
+    // 軌道の経由点を3Dワールド座標で定義
     const home = { x: 110, y: 0, z: 70 };
     const pZ = Math.max(0, this.ppPickZ);
     const plZ = Math.max(0, this.ppPlaceZ);
@@ -777,7 +807,7 @@ export class AppState {
       home,
     ];
 
-    // Deduplicate points to minimize API calls
+    // API呼び出しを減らすために、重複する座標をまとめる
     const uniquePointsMap = new Map<string, typeof path[0]>();
     path.forEach(p => {
       const key = `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
@@ -786,7 +816,7 @@ export class AppState {
       }
     });
 
-    // Fetch conversions in parallel
+    // 各ユニークな3D座標を2D画像座標に並行して変換
     const conversionPromises = Array.from(uniquePointsMap.entries()).map(async ([key, p]) => {
       const uv = await this.convertWorldToImage(p.x, p.y, p.z);
       return { key, uv };
@@ -795,12 +825,13 @@ export class AppState {
     const conversions = await Promise.all(conversionPromises);
     const conversionMap = new Map(conversions.map(c => [c.key, c.uv]));
 
-    // Reconstruct path
+    // 元の軌道パスを2D画像座標で再構築
     const points2D = [];
     for (const p of path) {
       const key = `${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
       const uv = conversionMap.get(key);
 
+      // 変換に成功した点を追加
       if (uv) {
         points2D.push(uv);
       } else {
@@ -814,6 +845,7 @@ export class AppState {
     this.ppTrajectoryPoints = points2D;
   }
 
+  // Pick & Place画像がクリックされたときの処理
   async handlePPImageClick(event: MouseEvent) {
     if (this.ppExecuting) return;
 
@@ -825,12 +857,14 @@ export class AppState {
     let u_norm: number;
     let v_norm: number;
 
+    // ホバー中のオブジェクトがあれば、その中心をクリック位置とする
     if (this.ppHoveredObject && this.ppHoveredObject.ground_center) {
       u_norm = this.ppHoveredObject.ground_center.u_norm / 1000.0;
       v_norm = this.ppHoveredObject.ground_center.v_norm / 1000.0;
       u = Math.round(u_norm * img.naturalWidth);
       v = Math.round(v_norm * img.naturalHeight);
     } else {
+      // なければ、クリックされた位置をそのまま使用
       const x_click = event.clientX - rect.left;
       const y_click = event.clientY - rect.top;
       u = Math.floor(x_click * (img.naturalWidth / rect.width));
@@ -842,20 +876,20 @@ export class AppState {
     }
 
     try {
-      // Step 1: Convert pixel coordinates to marker coordinates
+      // 座標変換を段階的に実行: pixel -> marker -> world
       const markerCoords = await this.convertCoordinates(u, v, "pixel", "marker");
-
-      // Step 2: Convert marker coordinates to world coordinates
       const worldCoords = await this.convertCoordinates(markerCoords.xm, markerCoords.ym, "marker", "world", markerCoords.zm);
 
-      // If both conversions succeed, create the point
+      // 変換が成功したら、すべての座標情報を含むポイントオブジェクトを作成
       const pt = { u, v, u_norm, v_norm, ...markerCoords, ...worldCoords };
 
+      // ピック/プレースポイントを設定
       if (!this.ppPickPoint) {
         this.ppPickPoint = pt;
       } else if (!this.ppPlacePoint) {
         this.ppPlacePoint = pt;
       } else {
+        // 3回目のクリックでリセット
         this.ppPickPoint = pt;
         this.ppPlacePoint = null;
       }
@@ -865,6 +899,7 @@ export class AppState {
     }
   }
 
+  // 汎用的な座標変換関数。pixel, marker, world座標系間の変換を行う。
   async convertCoordinates(x: number, y: number, source: string, target: string, z: number = 0): Promise<any> {
     const args: any = { x, y, source, target, calling_client: "web_client" };
     if (source === 'marker' || source === 'world') {
@@ -901,18 +936,18 @@ export class AppState {
       }
       return JSON.parse(dataText);
     } catch (e: any) {
-      // Catch JSON parsing errors or errors thrown from above
-      if (e.message.includes("ArUco")) throw e; // re-throw specific error
+      // ArUcoエラーはそのままスローし、それ以外のパースエラーなどは汎用的なメッセージでラップする
+      if (e.message.includes("ArUco")) throw e;
       console.error("Failed to process coordinate conversion response:", responseText);
       throw new Error(`座標変換の応答処理に失敗しました: ${e.message}`);
     }
   }
 
+  // ワールド座標を画像座標に変換する（軌道計算用）。エラー時はnullを返す。
   async convertWorldToImage(x: number, y: number, z: number): Promise<{u: number, v: number} | null> {
     try {
-      // We use the new robust convertCoordinates function, but we don't want to throw errors here,
-      // as a failing point should not stop the entire trajectory from being calculated.
-      // Instead, we return null and log a warning.
+      // 堅牢なconvertCoordinates関数を使用するが、ここではエラーをスローしない。
+      // 1点の変換失敗で軌道計算全体が停止するのを防ぐため、nullを返して警告をログに出力する。
       const coords = await this.convertCoordinates(x, y, "world", "pixel", z);
       if (typeof coords.u === "number") {
         return coords;
@@ -924,6 +959,7 @@ export class AppState {
     }
   }
 
+  // Geminiのツール実行ログを定期的にポーリングする
   async pollGeminiLogs() {
     if (!this.geminiLive && !this.cliMonitor) {
       this.isPollingLogs = false;
@@ -945,10 +981,10 @@ export class AppState {
         const text = result.content.find((c: any) => c.type === "text")?.text;
         if (text) {
           const logs = JSON.parse(text);
-          this.geminiLogs = logs.reverse();
+          this.geminiLogs = logs.reverse(); // 最新のログが上に来るように逆順にする
 
           if (this.geminiLogs.length > 0) {
-            this.parseGeminiVisuals(this.geminiLogs);
+            this.parseGeminiVisuals(this.geminiLogs); // ログから視覚情報をパース
           }
         }
       }
@@ -957,29 +993,41 @@ export class AppState {
     }
 
     if (this.isPollingLogs) {
-      setTimeout(() => this.pollGeminiLogs(), 1000);
+      setTimeout(() => this.pollGeminiLogs(), 1000); // 1秒後に再度ポーリング
     }
   }
 
+  // Geminiによって実行されたコマンドから軌道を更新する
   async updateGeminiTrajectory(commands: string) {
     const cmds = commands.split(";");
     const points3D = [];
-    const home = { x: 110, y: 0, z: 70, type: "home" };
-    points3D.push(home);
+    // サーバー側の初期位置設定(130, 0, 70)に合わせる
+    const home = { x: 130, y: 0, z: 70, type: "home" };
+    
+    // 現在位置を追跡するための変数。初期値はホームポジション。
+    let current = { ...home };
+    points3D.push({ ...current, type: "home" });
 
+    // "move"コマンドをパースして経由点を抽出
     for (const cmd of cmds) {
       const c = cmd.trim();
       if (c.toLowerCase().startsWith("move")) {
         const xMatch = c.match(/x\s*=\s*([-+]?\d*\.?\d+)/i);
         const yMatch = c.match(/y\s*=\s*([-+]?\d*\.?\d+)/i);
         const zMatch = c.match(/z\s*=\s*([-+]?\d*\.?\d+)/i);
-        if (xMatch && yMatch && zMatch) {
-          points3D.push({ x: parseFloat(xMatch[1]), y: parseFloat(yMatch[1]), z: parseFloat(zMatch[1]), type: "waypoint" });
+        
+        let updated = false;
+        if (xMatch) { current.x = parseFloat(xMatch[1]); updated = true; }
+        if (yMatch) { current.y = parseFloat(yMatch[1]); updated = true; }
+        if (zMatch) { current.z = parseFloat(zMatch[1]); updated = true; }
+        
+        if (updated) {
+          points3D.push({ ...current, type: "waypoint" });
         }
       }
     }
-    points3D.push({ ...home, type: "home" });
 
+    // 3D座標を2D画像座標に変換
     const promises = points3D.map(async (p) => {
       const uv = await this.convertWorldToImage(p.x, p.y, p.z);
       return uv ? { ...uv, ...p } : null;
@@ -989,8 +1037,9 @@ export class AppState {
     this.geminiTrajectoryPoints = results.filter((p) => p !== null);
   }
 
+  // Geminiのログから検出結果や軌道などの視覚情報をパースして状態を更新する
   async parseGeminiVisuals(logs: any[]) {
-    // Detections
+    // 最新のget_live_imageログから検出結果を取得
     const latestLog = logs.length > 0 ? logs[0] : null;
     if (latestLog && latestLog.tool === "get_live_image" && latestLog.args?.detect_objects) {
       if (latestLog.result) {
@@ -1005,7 +1054,7 @@ export class AppState {
       this.geminiDetections = [];
     }
 
-    // Trajectory
+    // CLIモニターの場合、execute_sequenceログから軌道を取得
     if (this.geminiLive) return;
 
     const moveLog = logs.find((l: any) => l.tool === "execute_sequence");
@@ -1016,6 +1065,7 @@ export class AppState {
     }
   }
 
+  // Gemini CLIモニターの表示を切り替える
   toggleCliMonitor() {
     this.cliMonitor = !this.cliMonitor;
     if (this.cliMonitor) {
@@ -1028,9 +1078,10 @@ export class AppState {
     }
   }
 
+  // ジョイパッドの状態を定期的にポーリングする
   startJoypadPolling() {
     const loop = async () => {
-        if (!this.ppExecuting) {
+        if (!this.ppExecuting) { // Pick&Place実行中はポーリングしない
             try {
                 const res = await fetch("/mcp", {
                     method: "POST",
@@ -1042,18 +1093,46 @@ export class AppState {
                     const text = result.content?.find((c: any) => c.type === "text")?.text;
                     if (text) {
                         const state = JSON.parse(text);
-                        const scale = 10 / 128;
+                        const scale = 10 / 128; // 値をスケーリング
                         this.joypadLeft = { x: (state.X ?? 0) * scale, y: (state.Y ?? 0) * scale };
                         this.joypadRight = { x: (state.RX ?? 0) * scale, y: (state.RY ?? 0) * scale };
                     }
                 }
             } catch (e) {}
         }
-        setTimeout(loop, 100);
+        setTimeout(loop, 100); // 100msごとにポーリング
     };
     loop();
   }
 
+  // ロボットのステータスを定期的にポーリングする
+  startRobotStatusPolling() {
+    const loop = async () => {
+        // Pick & Place実行中や他の重い処理中はポーリングしない
+        if (!this.ppExecuting && !this.capturing && !this.detecting && !this.isExecuting) {
+            try {
+                const res = await fetch("/mcp", {
+                    method: "POST",
+                    body: JSON.stringify({ type: "call_tool", name: "dump", arguments: { calling_client: "web_client" } }),
+                    headers: { "Content-Type": "application/json" },
+                });
+                if (res.ok) {
+                    const result = await res.json();
+                    const text = result.content?.find((c: any) => c.type === "text")?.text;
+                    if (text) {
+                        try {
+                            this.robotStatus = JSON.parse(text);
+                        } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
+        setTimeout(loop, 1000); // 1秒ごとにポーリング
+    };
+    loop();
+  }
+
+  // 接続成功時に効果音を再生する
   playConnectedSound() {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -1071,17 +1150,19 @@ export class AppState {
       osc.stop(ctx.currentTime + 0.1);
     } catch (e) {}
   }
-  // Gemini Live
+
+  // Gemini Liveの接続/切断を切り替える
   async toggleGeminiLive() {
     this.geminiLive = !this.geminiLive;
     if (this.geminiLive) {
+      // 接続時の初期化処理
       this.clearDetectionsAndTracking();
       this.geminiLiveMonitorLoaded = false;
       this.geminiLiveLog = [];
       this.geminiInterimTranscript = "";
       this.geminiLiveMonitorImageSrc = `http://${window.location.hostname}:8000/stream.mjpg?t=${Date.now()}`;
 
-      
+      // GeminiLiveClientをインスタンス化し、コールバックを設定
       this.geminiClient = new GeminiLiveClient({
         onConnect: () => { this.geminiStatus = "Connected"; this.playConnectedSound(); console.log('Gemini Status:', this.geminiStatus); this.geminiLiveMonitorLoaded = true; },
         onDisconnect: () => { this.geminiStatus = "Disconnected"; this.geminiMicLevel = 0; this.geminiSpeakerLevel = 0; },
@@ -1089,31 +1170,35 @@ export class AppState {
         onVolume: (mic, speaker) => { this.geminiMicLevel = mic; this.geminiSpeakerLevel = speaker; },
         onUserQuery: (text, isFinal) => {
             if (isFinal) {
-                // 最終結果が空でなければログに追加
+                // 最終的な音声認識結果をログに追加
                 if (text) {
                     this.geminiLiveLog.push({ source: "user", content: text, timestamp: Date.now() });
                 }
                 this.geminiInterimTranscript = "";
             } else {
-                // 中間結果を更新
+                // 中間結果をUIに表示
                 this.geminiInterimTranscript = text;
             }
         },
         onModelResponse: (text) => {
+            // モデルからの応答をストリーミングでログに追加
             const lastLog = this.geminiLiveLog[this.geminiLiveLog.length - 1];
             if (lastLog && lastLog.source === "model") lastLog.content += text;
             else this.geminiLiveLog.push({ source: "model", content: text, timestamp: Date.now() });
         },
         onToolCall: async (name, args) => {
+            // ツール呼び出しをログに記録
             const timestamp = Date.now();
             const entry = { source: "tool" as const, toolName: name, toolArgs: args, timestamp, toolResult: undefined as string | undefined };
             this.geminiLiveLog.push(entry);
 
+            // コマンドに応じて軌道を描画
             if (name === "execute_sequence" && args.commands) {
                 await this.updateGeminiTrajectory(args.commands);
             }
 
             try {
+                // MCPサーバーにツール実行をリクエスト
                 const res = await fetch("/mcp", {
                     method: "POST",
                     body: JSON.stringify({ type: "call_tool", name, arguments: { ...args, calling_client: "gemini_live" } }),
@@ -1121,6 +1206,7 @@ export class AppState {
                 });
                 const result = await res.json();
 
+                // 実行後は軌道をクリア
                 if (name === "execute_sequence") {
                     this.geminiTrajectoryPoints = [];
                 }
@@ -1130,21 +1216,20 @@ export class AppState {
                 const targetEntry = this.geminiLiveLog.find(e => e.timestamp === timestamp && e.toolName === name);
                 if (targetEntry) targetEntry.toolResult = resultStr;
 
-                // Geminiに返す結果を整形する
-                // content配列からテキストを抽出し、それがJSONであればパースする。
+                // Geminiに返す結果を整形
                 if (result.content && Array.isArray(result.content)) {
                     const textPart = result.content.find((c: any) => c.type === "text" && c.text)?.text;
                     if (textPart) {
                         try {
-                            // テキストがJSON文字列ならパースして返す
+                            // JSONならパースして返す
                             return JSON.parse(textPart);
                         } catch (e) {
-                            // JSONでなければテキストを結果として返す
+                            // JSONでなければテキストとして返す
                             return { result: textPart };
                         }
                     }
                 }
-                // contentがない、またはテキストパートがない場合は、汎用的な成功応答を返す
+                // 汎用的な成功応答
                 return { result: "Tool executed successfully." };
             } catch (e: any) {
                 if (name === "execute_sequence") {
@@ -1154,17 +1239,17 @@ export class AppState {
                 const errStr = `Error: ${e.message}`;
                 const targetEntry = this.geminiLiveLog.find(e => e.timestamp === timestamp && e.toolName === name);
                 if (targetEntry) targetEntry.toolResult = errStr;
-                return { error: errStr };
+                return { error: errStr }; // エラーを返す
             }
         }
       });
-      await this.geminiClient.connect(this.tools);
+      await this.geminiClient.connect(this.tools); // 接続を開始
     } else {
+        // 切断時の処理
         this.clearDetectionsAndTracking();
         if (this.geminiClient) {
           this.geminiClient.disconnect();
-          // Manually reset state to ensure UI consistency,
-          // in case the onDisconnect callback doesn't fire immediately.
+          // onDisconnectコールバックが即座に発火しない場合に備え、手動で状態をリセット
           this.geminiClient = null;
           this.geminiStatus = "Disconnected";
           this.geminiMicLevel = 0;
@@ -1172,6 +1257,4 @@ export class AppState {
         }
     }
   }
-
-  
 }

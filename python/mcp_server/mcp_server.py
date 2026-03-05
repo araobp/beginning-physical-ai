@@ -80,7 +80,7 @@ SERIAL_PORT = detect_serial_port()
 # シリアル通信のボーレート
 BAUD_RATE = 9600
 # コマンド応答のタイムアウト（秒）
-TIMEOUT = 45
+TIMEOUT = 180
 
 # --- ビジョンシステム設定 ---
 # カメラキャリブレーションによって得られた内部パラメータファイル
@@ -99,6 +99,11 @@ CAMERA_ID = 0
 ROBOT_BASE_OFFSET_X = 140.0 + 56.0
 ROBOT_BASE_OFFSET_Y = 100.0
 YOLO_MODEL_PATH = "best.pt"
+
+# ロボットの初期位置 (ホームポジション)
+INITIAL_POS_X = 130
+INITIAL_POS_Y = 0
+INITIAL_POS_Z = 70
 
 mcp = FastMCP(
     "RobotArmController"
@@ -153,7 +158,12 @@ def log_tool_call(tool_name, args, result):
 gui_queue = queue.Queue()
 
 def _update_trajectory_from_commands(commands: str):
-    """コマンド列から軌道ポイントを抽出し、VisionSystemに設定する"""
+    """
+    コマンド列から軌道ポイントを抽出し、VisionSystemに設定する。
+
+    注意: この関数はサーバー側のGUIウィンドウ（OpenCV）に軌道を描画するために使用されます。
+    MCPクライアント（Webブラウザ等）の動作には直接影響しません。
+    """
     vs = get_vision_system()
     if not vs: return
 
@@ -191,7 +201,22 @@ def _update_trajectory_from_commands(commands: str):
         # VisionSystemに設定 (u, vはダミー)
         vs.pick_point = {'xm': pick['xm'], 'ym': pick['ym'], 'u': 0, 'v': 0}
         vs.place_point = {'xm': place['xm'], 'ym': place['ym'], 'u': 0, 'v': 0}
-        print(f"[Trajectory] Set Pick: {vs.pick_point}, Place: {vs.place_point}")
+        
+        # Z値の更新 (コマンドから高さを反映)
+        if z_values:
+            max_z = max(z_values)
+            vs.safety_z = max_z
+            
+            # 安全高さより低いZ値を抽出 (マージン5mm)
+            low_zs = [z for z in z_values if z < max_z - 5.0]
+            if low_zs:
+                vs.pick_z = low_zs[0]
+                vs.place_z = low_zs[-1] if len(low_zs) > 1 else low_zs[0]
+            else:
+                vs.pick_z = max_z
+                vs.place_z = max_z
+
+        print(f"[Trajectory] Set Pick: {vs.pick_point}, Place: {vs.place_point}, Z: {vs.pick_z}/{vs.place_z}/{vs.safety_z}")
 
 # --- 内部ヘルパー関数 ---
 def _fetch_workpiece_data():
@@ -285,11 +310,13 @@ def get_serial():
 def send_command(cmd: str) -> str:
     """
     コマンドをArduinoに送信し、応答を待機する。
-    
+
     通信プロトコル：
     1. コマンド文字列の末尾に改行コード `\\n` を付与して送信。
     2. Arduinoからの応答を一行ずつ読み込む。
-    3. 応答の最後にプロンプト文字 '%' が送られてきたら、コマンド完了とみなす。
+    3. Arduinoはセミコロンで区切られた各サブコマンド実行後に ';' を返す。サーバーはこれを受信することでタイムアウトを実質的にリセットする。
+    4. 応答の最後にプロンプト文字 '!' が送られてきたら、コマンドシーケンス全体の完了とみなす。
+    5. 設定されたタイムアウト時間内に '!' を受信できない場合、エラーを返す。
     """
     if VERBOSE_SERIAL:
         print(f"[Serial] -> {cmd}")
@@ -298,15 +325,30 @@ def send_command(cmd: str) -> str:
         conn = get_serial()
         if not conn: return "Error: Cannot connect to robot." if LANG == 'en' else "Error: ロボットに接続できません。"
         try:
+            conn.reset_input_buffer()
             full_cmd = cmd.strip() + "\n"
             conn.write(full_cmd.encode('utf-8'))
             response = []
+            last_activity_time = time.time()
+            SOFT_TIMEOUT = 10.0  # 10秒間応答がなければ切断とみなす
+
             while True:
-                line = conn.readline().decode('utf-8', errors='replace').strip()
+                # ソフトウェアタイムアウトのチェック
+                if time.time() - last_activity_time > SOFT_TIMEOUT:
+                    conn.close() # 強制切断して再接続を促す
+                    return "Error: Serial command timed out (No response for 10s)."
+
+                raw_line = conn.readline()
+                if not raw_line and conn.in_waiting == 0:
+                    # ハードウェアタイムアウト (TIMEOUT=180s)
+                    return "Error: Serial command timed out (Hard limit)."
+
+                line = raw_line.decode('utf-8', errors='replace').strip()
+                if line: last_activity_time = time.time() # 何か受信したらタイマーリセット
+
+                if line == ';': continue # ハートビート
                 # コマンド完了の合図
-                if line == '%': break
-                # タイムアウト（readlineが空文字を返す）かつバッファが空の場合、ループを抜ける
-                if not line and conn.in_waiting == 0: break
+                if line == '!': break
                 if line: response.append(line)
             return "\n".join(response) if response else "Success"
         except Exception as e:
@@ -333,15 +375,19 @@ TOOL_DOCS = {
     When planning to manipulate objects (e.g., pick and place), **always execute this tool first** to understand the exact "gripping_height" to avoid collisions.
 
     """,
-        'execute_sequence': """
+        'execute_sequence': f"""
     Sends a sequence of operations (command sequence) separated by semicolons ';' to the robot arm.
 
     [Command Syntax]
     1. move x=<val> y=<val> z=<val> s=<speed>:
        Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm) in the **World Coordinate System (Robot Base)**.
-       s is the speed, range 0-100.
-    2. grip <open|close>:
+       s is the speed, range 1-100.
+    2. grip <open|close|p=<percentage>> [s=<speed>]:
        Opens or closes the gripper.
+       - `open`: Opens to 50% (a safe default for picking up various objects).
+       - `close`: Fully closes (equivalent to `p=0`).
+       - `p`: Sets the opening percentage (0=closed, 100=fully open). This overrides `open`/`close`.
+       - `s`: Speed, range 1-100.
     3. delay t=<ms>:
        Pauses for the specified time (milliseconds). Use to wait for physical stability.
 
@@ -351,19 +397,34 @@ TOOL_DOCS = {
         description (str): Optional description of the sequence (ignored by the robot, but useful for logs).
 
     [Rules for AI Controller]
+    - **Start from Closed Gripper**: When starting a sequence from the initial position, always include 'grip close' as the first command to ensure no object is accidentally held.
     - **Open Gripper**: Always include 'grip open' immediately before descending to the gripping height.
     - **Close Gripper after Release**: Always include 'grip close' after releasing the object.
     - **Insert Delays**: Always insert 'delay t=1000' after 'grip close' or 'grip open'.
+    - **Gripper Speed**: When gripping an object (`grip close`), use a gentle speed (e.g., `s=30`) to avoid impact. When releasing (`grip open`), a faster speed (e.g., `s=70`) is acceptable.
     - **Calculate and Use Safety Height**: Before horizontal movement, you must calculate the safety height. Use `get_live_image` to detect the height (`h`) of any objects at the destination. Use `get_workpiece_catalog` to find the `gripping_height` of the object to be picked. Calculate both "Pick Safety Height" (e.g., `gripping_height` + 30mm) and "Place Safety Height" (e.g., destination object height(`h`) + `gripping_height` + 30mm), then **use the higher of the two as the "Travel Safety Height"**.
     - **Collision Avoidance**: After gripping a workpiece, always raise the arm to the "Travel Safety Height" before moving horizontally. Maintain this height while moving to a point above the destination.
     - **Coordinate System**: Use the World Coordinate System values (x, y, z) exactly as returned by `get_live_image`. **DO NOT** subtract offsets or convert to marker coordinates manually.
     - **Release Height**: If there is an object at the place destination, release (grip open) directly above it (at the Travel Safety Height). If the place destination is a flat surface, descend to an appropriate height (e.g., gripping_height + 20mm) to release.
-    - **Retreat after Release**: After releasing the object, always add a command to slowly return to the initial position `{ x: 130, y: 0, z: 70 }` at speed `s=50`.
+    - **Retreat after Release**: After releasing the object, always add a command to slowly return to the initial position {{ x: {INITIAL_POS_X}, y: {INITIAL_POS_Y}, z: {INITIAL_POS_Z} }} at speed s=50. After returning, add a 'grip open' command to prepare for the next operation.
     """,
         'get_robot_status': """
     Retrieves the current status of the robot arm.
     Returns a string containing TCP coordinates in **World Coordinate System (mm)**, joint angles, and other status info.
-    Use this to understand the arm's current position before planning movements.
+    Use this to understand the arm's current state before planning movements.
+    """,
+        'dump': """
+    (For Debugging) Retrieves the current status of the robot arm as a raw JSON object, providing detailed calibration and state information.
+
+    [JSON Output Structure]
+    - `joints`: An array of objects for the 3 main joints: J1 (Base), J2 (Shoulder), and J3 (Elbow).
+      - `ch`: Channel number (c0=J1/Base, c1=J2/Shoulder, c2=J3/Elbow).
+      - `p0`, `a0`: Pulse and angle for calibration point 0.
+      - `p1`, `a1`: Pulse and angle for calibration point 1.
+      - `cur_us`: Current servo pulse width in microseconds.
+      - `cur_angle`: Current calculated joint angle in degrees.
+    - `gripper`: Gripper status object, including `open`, `close` pulse values and `cur_us`.
+    - `tcp`: Current logical coordinates of the Tool Center Point (`x`, `y`, `z`) in the World Coordinate System.
     """,
         'get_joypad_status': """
     Retrieves the current input state of the joypad.
@@ -424,16 +485,20 @@ TOOL_DOCS = {
     ロボットアームで物体を操作する計画（ピック＆プレイスなど）を立てる際には、対象物の正確な「把持高さ(gripping_height)」を把握するため、**必ず最初にこのツールを実行してください。**
 
     """,
-        'execute_sequence': """
+        'execute_sequence': f"""
     ロボットアームに一連の動作（コマンドシーケンス）をセミコロン ';' 区切りで送信します。
 
     【コマンド文法】
     1. move x=<値> y=<値> z=<値> s=<速度>:
        アームの先端 (TCP: Tool Center Point) を指定の3次元座標 (mm) へ移動させます。
        **座標系は「世界座標系（ロボットベース原点, mm）」です。**
-       sは移動速度で、0から100の範囲で指定します。
-    2. grip <open|close>:
-       グリッパーを開きます ('open') または閉じます ('close')。
+       sは移動速度で、1から100の範囲で指定します。
+    2. grip <open|close|p=<パーセント>> [s=<速度>]:
+       グリッパーを開閉します。
+       - `open`: 50%開きます（様々な物体を掴むための安全なデフォルト値）。
+       - `close`: 全閉します（`p=0` と同等）。
+       - `p`: 開く度合いをパーセントで指定します (0=全閉, 100=全開)。`open`/`close`より優先されます。
+       - `s`: 開閉速度で、1から100の範囲で指定します。
     3. delay t=<ミリ秒>:
        指定した時間 (ミリ秒単位) だけ動作を停止します。物理的な動作が安定するのを待つために使用します。
 
@@ -443,20 +508,35 @@ TOOL_DOCS = {
         description (str): 動作の説明（ロボットには無視されますが、ログ記録に役立ちます）。
 
     【AI管制官への絶対遵守ルール：経路計画】
+    - **グリッパーを閉じて開始**: 初期位置から動作を開始する際は、意図せず物を掴んでいないことを確実にするため、必ず最初に 'grip close' コマンドを実行してください。
     - **距離と単位**: このツール群で扱う「距離」とは、すべて**世界座標系における物体間の物理的な距離**を指し、画像上のピクセル(uv)距離ではありません。すべての座標と距離の単位は**ミリメートル(mm)**です。
     - **把持前の開放**: ピック動作において、把持高さへ下降する直前に、必ず 'grip open' を実行してください。
     - **リリース後の閉鎖**: 物体をリリースした後には、必ず 'grip close' を実行してください。
     - **待機時間の挿入**: 把持 (grip close) や解放 (grip open) の直後には、グリッパーが完全に動作するのを待つため、**必ず 'delay t=1000' (1秒待機) を挿入してください。**
+    - **グリッパー速度**: 物体を掴む際 (`grip close`) は、衝撃を避けるためゆっくりとした速度（例: `s=30`）を使用してください。物体を放す際 (`grip open`) は、より速い速度（例: `s=70`）で構いません。
     - **安全高度の計算と利用**: 水平移動の前には、必ず安全高度を算出してください。プレイス先に物体がある場合、その物体の高さ(`h`)は `get_live_image` を使って検出します。把持する物体の `gripping_height` は `get_workpiece_catalog` で確認します。「ピック地点の安全高度（例: `gripping_height` + 30mm）」と「プレイス地点の安全高度（例: プレイス先の物体の高さ(`h`) + `gripping_height` + 30mm）」の両方を計算し、**より高い方を「移動安全高度」として採用してください**。
     - **衝突回避**: ワークを掴んだ後の水平移動は、必ず一度「移動安全高度」までアームを上昇させてから行ってください。その高さを維持したままプレイス地点の上空へ水平移動してください。
     - **座標系**: `get_live_image` で取得した世界座標 (x, y, z) をそのまま使用してください。**手動でオフセットを引いたり、マーカー座標系に変換したりしないでください。**
     - **リリース高度**: プレイス先に物体がある場合は、その上空（移動安全高度）でそのままリリース（grip open）を行ってください。プレイス先が平坦な場所であれば、適切な高さ（例: 把持高さ + 20mm）まで下降してリリースしてください。
-    - **リリース後の退避**: 物体をリリースした後は、必ず初期位置である `{ x: 130, y: 0, z: 70 }` へ、速度 `s=50` でゆっくりと戻るコマンドを追加してください。
+    - **リリース後の退避**: 物体をリリースした後は、必ず初期位置である {{ x: {INITIAL_POS_X}, y: {INITIAL_POS_Y}, z: {INITIAL_POS_Z} }} へ、速度 s=50 でゆっくりと戻るコマンドを追加してください。初期位置へ戻った後は、次の操作に備えて 'grip open' コマンドを追加してください。
     """,
         'get_robot_status': """
     ロボットアームの現在の状態を取得します。
     **世界座標系（mm）**でのTCP座標、各関節の角度などが含まれる文字列を返します。
     動作計画を立てる前に、アームの現在位置を正確に把握するために使用してください。
+    """,
+        'dump': """
+    （デバッグ用）ロボットアームの現在の状態を、詳細なキャリブレーションおよび状態情報を含む未加工のJSONオブジェクトとして取得します。
+
+    【JSON出力構造】
+    - `joints`: 3つの主要関節 J1 (Base), J2 (Shoulder), J3 (Elbow) のオブジェクトを含む配列。
+      - `ch`: チャンネル番号 (c0=J1/Base, c1=J2/Shoulder, c2=J3/Elbow)。
+      - `p0`, `a0`: キャリブレーション点0のパルスと角度。
+      - `p1`, `a1`: キャリブレーション点1のパルスと角度。
+      - `cur_us`: 現在のサーボのパルス幅（マイクロ秒）。
+      - `cur_angle`: 現在の計算上の関節角度（度）。
+    - `gripper`: グリッパーの状態オブジェクト。`open`と`close`のパルス値、`cur_us`を含みます。
+    - `tcp`: ツールセンターポイントの現在の論理座標 (`x`, `y`, `z`) を世界座標系で示します。
     """,
         'get_joypad_status': """
     現在のジョイパッドの入力状態を取得します。
@@ -523,6 +603,7 @@ def get_workpiece_catalog(calling_client: str = 'gemini') -> str:
 @mcp.tool()
 @set_doc(DOCS['execute_sequence'])
 def execute_sequence(commands: str, description: str = "", calling_client: str = 'gemini') -> str:
+    # サーバー側GUIでの軌道表示用に更新（クライアント動作には影響なし）
     _update_trajectory_from_commands(commands)
     res = send_command(commands)
     log_tool_call("execute_sequence", {"commands": commands, "description": description, "calling_client": calling_client}, res)
@@ -531,8 +612,15 @@ def execute_sequence(commands: str, description: str = "", calling_client: str =
 @mcp.tool()
 @set_doc(DOCS['get_robot_status'])
 def get_robot_status(calling_client: str = 'gemini') -> str:
-    res = send_command("dump")
+    res = send_command("status")
     log_tool_call("get_robot_status", {"calling_client": calling_client}, res)
+    return res
+
+@mcp.tool()
+@set_doc(DOCS['dump'])
+def dump(calling_client: str = 'gemini') -> str:
+    res = send_command("dump")
+    log_tool_call("dump", {"calling_client": calling_client}, res)
     return res
 
 @mcp.tool()

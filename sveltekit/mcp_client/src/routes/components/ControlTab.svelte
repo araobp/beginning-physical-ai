@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AppState } from "../state.svelte";
   import { getColorForObject, getTextColor } from "$lib/utils";
+  import LiveButton from "./LiveButton.svelte";
 
   let { appState }: { appState: AppState } = $props();
 </script>
@@ -9,13 +10,12 @@
   <!-- Control Panel -->
   <div class="d-flex flex-column gap-2 mb-2 w-100 align-items-center">
     <div class="d-flex gap-2 flex-wrap justify-content-center">
-      <div class="border rounded p-2 d-flex gap-2 align-items-center bg-light shadow-sm">
-        <button class="btn {appState.ppLive ? 'btn-danger' : 'btn-outline-danger'} btn-sm"
-          onclick={() => appState.toggleLive()}
-          class:spaceship-glow={appState.currentTheme === 'spaceship' && appState.ppLive}
-        >
-          {appState.ppLive ? appState.t.stop_live : appState.t.live}
-        </button>
+      <div class="border rounded p-2 d-flex align-items-center bg-light shadow-sm gap-2">
+        <LiveButton 
+          appState={appState} 
+          isLive={appState.ppLive} 
+          onToggle={() => appState.toggleLive()} 
+        />
         <div class="vr mx-1"></div>
         <button class="btn btn-secondary btn-sm" onclick={() => appState.clearPPPoints()} disabled={appState.ppExecuting}>
           {appState.t.clear}
@@ -24,7 +24,7 @@
           {appState.ppExecuting ? appState.t.running : appState.t.pick_place}
         </button>
       </div>
-      <div class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center">
+      <div class="border rounded p-2 d-flex align-items-center bg-light shadow-sm gap-3 flex-wrap justify-content-center">
         <div class="form-check form-switch mb-0" style="font-size: 0.9em;">
           <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={appState.ppShowDetections} />
           <label class="form-check-label" for="ppShowDetectionsSwitch">{appState.t.show_detections}</label>
@@ -36,7 +36,7 @@
       </div>
     </div>
     <div class="d-flex gap-2 flex-wrap justify-content-center">
-      <div class="border rounded p-2 d-flex gap-3 align-items-center bg-light shadow-sm flex-wrap justify-content-center">
+      <div class="border rounded p-2 d-flex align-items-center bg-light shadow-sm gap-3 flex-wrap justify-content-center">
         <div class="form-check form-switch mb-0" style="font-size: 0.9em;">
           <input class="form-check-input" type="checkbox" role="switch" id="ppShowTrajectorySwitch" bind:checked={appState.ppShowTrajectory} />
           <label class="form-check-label" for="ppShowTrajectorySwitch">{appState.t.show_trajectory}</label>
@@ -56,7 +56,7 @@
   {#if appState.ppImage}
     <div class="position-relative d-inline-block" onmousemove={(e) => appState.handlePPMouseMove(e)} onmouseleave={() => appState.handlePPMouseLeave()} role="group">
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-      <img src={appState.ppImage} alt="Pick & Place View" class="img-fluid border rounded" style="max-height: 440px; cursor: crosshair;" onclick={(e) => appState.handlePPImageClick(e)} onload={(e) => { const img = e.currentTarget as HTMLImageElement; appState.ppImageDim = { w: img.naturalWidth, h: img.naturalHeight }; }} />
+      <img src={appState.ppImage} alt="Pick & Place View" class="img-fluid border rounded" style="max-height: 55vh; cursor: crosshair;" onclick={(e) => appState.handlePPImageClick(e)} onload={(e) => { const img = e.currentTarget as HTMLImageElement; appState.ppImageDim = { w: img.naturalWidth, h: img.naturalHeight }; }} />
 
       {#if appState.ppShowDetections}
         {#each appState.ppDetections as obj}
@@ -129,6 +129,16 @@
           </div>
         </div>
       {/if}
+
+      {#if appState.robotStatus}
+        <div style="position: absolute; top: 2px; left: 2px; right: 2px; background: rgba(0, 0, 0, 0.6); color: white; padding: 4px 8px; font-family: monospace; font-size: 0.8em; z-index: 10; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top-left-radius: var(--bs-border-radius); border-top-right-radius: var(--bs-border-radius);">
+           <span class="fw-bold">TCP:</span> X={appState.robotStatus.tcp.x.toFixed(1)} Y={appState.robotStatus.tcp.y.toFixed(1)} Z={appState.robotStatus.tcp.z.toFixed(1)}
+           <span class="mx-2">|</span>
+           {#each appState.robotStatus.joints as j}
+             <span class="me-2"><span class="fw-bold">J{j.ch + 1}:</span> {j.cur_angle.toFixed(1)}°</span>
+           {/each}
+        </div>
+      {/if}
     </div>
   {:else}
     <div class="text-muted p-5 border rounded bg-light">
@@ -137,7 +147,7 @@
   {/if}
 
   <!-- Joypad Visualization -->
-  <div class="d-flex flex-column align-items-center mt-2 mb-2 p-1 border rounded bg-light">
+  <div class="d-flex flex-column align-items-center mt-2 mb-1 p-1 border rounded bg-light">
     <div class="d-flex gap-4 justify-content-center">
       <div class="joypad-stick">
         <div class="stick-label">{appState.t.joypad_left}</div>
@@ -153,6 +163,7 @@
       </div>
     </div>
   </div>
+
 </div>
 
 <style>

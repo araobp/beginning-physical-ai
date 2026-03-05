@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AppState } from "../state.svelte";
   import { getColorForObject, getTextColor } from "$lib/utils";
+  import LiveButton from "./LiveButton.svelte";
 
   let { appState }: { appState: AppState } = $props();
 </script>
@@ -8,12 +9,11 @@
 <div class="container-fluid mt-1 mb-1">
   <div class="row mb-3">
     <div class="col-12 d-flex align-items-center gap-3">
-      <button class="btn {appState.cliMonitor ? 'btn-danger' : 'btn-outline-danger'}"
-        onclick={() => appState.toggleCliMonitor()}
-        class:spaceship-glow={appState.currentTheme === 'spaceship' && appState.cliMonitor}
-      >
-        {appState.cliMonitor ? appState.t.stop_live : appState.t.live}
-      </button>
+      <LiveButton
+        appState={appState}
+        isLive={appState.cliMonitor}
+        onToggle={() => appState.toggleCliMonitor()}
+      />
       <span class="text-muted">{appState.t.gemini_monitor_desc}</span>
     </div>
   </div>
