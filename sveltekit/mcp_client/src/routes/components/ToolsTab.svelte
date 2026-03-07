@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppState, Tool } from "../state.svelte";
+  import type { AppState, Tool } from "$lib/app-state.svelte";
 
   let { appState }: { appState: AppState } = $props();
 </script>

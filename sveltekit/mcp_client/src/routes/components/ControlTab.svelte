@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AppState } from "../state.svelte";
+  import { AppState, MAX_GRIP_WIDTH } from "$lib/app-state.svelte.js";
   import { getColorForObject, getTextColor } from "$lib/utils";
   import LiveButton from "./LiveButton.svelte";
 
@@ -48,6 +48,8 @@
           <input type="number" class="form-control px-1" style="width: 65px;" bind:value={appState.ppPlaceZ} />
           <span class="input-group-text px-1">Safe Z</span>
           <input type="number" class="form-control px-1" style="width: 65px;" bind:value={appState.ppSafetyZ} />
+          <span class="input-group-text px-1">Grip Width</span>
+          <input type="number" class="form-control px-1" style="width: 65px;" min="0" max={MAX_GRIP_WIDTH} bind:value={appState.ppGripWidth} />
         </div>
       </div>
     </div>

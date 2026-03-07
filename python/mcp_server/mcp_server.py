@@ -382,10 +382,10 @@ TOOL_DOCS = {
     1. move x=<val> y=<val> z=<val> s=<speed>:
        Moves the Tool Center Point (TCP) to the specified 3D coordinates (mm) in the **World Coordinate System (Robot Base)**.
        s is the speed, range 1-100.
-    2. grip <open|close|p=<percentage>> [s=<speed>]:
+    2. grip <open|close [width]|p=<percentage>> [s=<speed>]:
        Opens or closes the gripper.
        - `open`: Opens to 50% (a safe default for picking up various objects).
-       - `close`: Fully closes (equivalent to `p=0`).
+       - `close [width]`: Closes the gripper to a specified width in millimeters (0-25mm). If width is omitted, it closes fully (`p=0`).
        - `p`: Sets the opening percentage (0=closed, 100=fully open). This overrides `open`/`close`.
        - `s`: Speed, range 1-100.
     3. delay t=<ms>:
@@ -493,10 +493,10 @@ TOOL_DOCS = {
        アームの先端 (TCP: Tool Center Point) を指定の3次元座標 (mm) へ移動させます。
        **座標系は「世界座標系（ロボットベース原点, mm）」です。**
        sは移動速度で、1から100の範囲で指定します。
-    2. grip <open|close|p=<パーセント>> [s=<速度>]:
+    2. grip <open|close [幅]|p=<パーセント>> [s=<速度>]:
        グリッパーを開閉します。
        - `open`: 50%開きます（様々な物体を掴むための安全なデフォルト値）。
-       - `close`: 全閉します（`p=0` と同等）。
+       - `close [幅]`: 指定した幅（ミリメートル、0-25mm）までグリッパーを閉じます。幅を省略した場合は全閉します(`p=0`)。
        - `p`: 開く度合いをパーセントで指定します (0=全閉, 100=全開)。`open`/`close`より優先されます。
        - `s`: 開閉速度で、1から100の範囲で指定します。
     3. delay t=<ミリ秒>:

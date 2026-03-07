@@ -11,6 +11,9 @@ export interface Tool {
 // 対応言語の型定義
 export type Lang = "ja" | "en";
 
+// グリッパーの最大把持幅 (mm)
+export const MAX_GRIP_WIDTH = 25;
+
 // UIの多言語対応用の翻訳テキスト
 const translations = {
   ja: {
@@ -41,6 +44,7 @@ const translations = {
     pick_z: "Pick Z (mm)",
     place_z: "Place Z (mm)",
     safety_z: "Safety Z (mm)",
+    grip_width: "把持幅 (mm)",
     no_image: "画像がありません",
     click_live: "'ライブ'をクリックしてPick & Place操作を開始してください",
     settings_lang: "言語設定",
@@ -83,6 +87,7 @@ const translations = {
     pick_z: "Pick Z (mm)",
     place_z: "Place Z (mm)",
     safety_z: "Safety Z (mm)",
+    grip_width: "Grip Width (mm)",
     no_image: "No image captured",
     click_live: "Click 'Live' to start Pick & Place operation",
     settings_lang: "Language",
@@ -136,6 +141,7 @@ export class AppState {
   ppPickZ = $state(10); // ピックアップ時のZ座標 (mm)
   ppPlaceZ = $state(30); // プレース時のZ座標 (mm)
   ppSafetyZ = $state(70); // 安全な高さのZ座標 (mm)
+  ppGripWidth = $state(0); // 把持時のグリッパー幅 (mm)。0で完全クローズ。
   ppLive = $state(false); // ライブストリーム表示中かどうかのフラグ
   ppShowDetections = $state(false); // ライブストリーム上で物体検出を有効にするかのフラグ
   ppDetections = $state<any[]>([]); // ライブストリーム上で検出されたオブジェクト
@@ -260,7 +266,7 @@ export class AppState {
   // MCPサーバーから利用可能なツールの一覧を読み込む
   async loadTools() {
     try {
-      const res = await fetch("/mcp", {
+      const res = await fetch("/api/mcp", {
         method: "POST",
         body: JSON.stringify({ type: "list_tools" }),
         headers: { "Content-Type": "application/json" },
@@ -279,7 +285,7 @@ export class AppState {
   // 単一のコマンド文字列をMCPサーバーに送信して実行する
   async executeSingleCommand(cmd: string) {
     try {
-      await fetch("/mcp", {
+      await fetch("/api/mcp", {
         method: "POST",
         body: JSON.stringify({
           type: "call_tool",
@@ -302,7 +308,7 @@ export class AppState {
     this.targetWorldCoords = null;
     this.detectedObjects = [];
     try {
-      const res = await fetch("/mcp", {
+      const res = await fetch("/api/mcp", {
         method: "POST",
         body: JSON.stringify({
           type: "call_tool",
@@ -384,7 +390,7 @@ export class AppState {
         this.detecting = true;
         this.detectedObjects = [];
         try {
-            const res = await fetch("/mcp", {
+            const res = await fetch("/api/mcp", {
                 method: "POST",
                 body: JSON.stringify({
                     type: "call_tool",
@@ -437,7 +443,7 @@ export class AppState {
 
         try {
             // 1. MCPサーバーから最新画像を取得
-            const resImg = await fetch("/mcp", {
+            const resImg = await fetch("/api/mcp", {
                 method: "POST",
                 body: JSON.stringify({
                     type: "call_tool",
@@ -516,7 +522,7 @@ export class AppState {
   // 画像のピクセル座標をワールド座標に変換する
   async convertImageCoordsToWorld(u: number, v: number) {
     try {
-      const res = await fetch("/mcp", {
+      const res = await fetch("/api/mcp", {
         method: "POST",
         body: JSON.stringify({
           type: "call_tool",
@@ -566,7 +572,7 @@ export class AppState {
     this.isExecuting = true;
     this.executionResult = null;
     try {
-      const res = await fetch("/mcp", {
+      const res = await fetch("/api/mcp", {
         method: "POST",
         body: JSON.stringify({
           type: "call_tool",
@@ -618,6 +624,7 @@ export class AppState {
     const pickZ = Number(this.ppPickZ ?? 20);
     const placeZ = Number(this.ppPlaceZ ?? 30);
     const safetyZ = Number(this.ppSafetyZ ?? 70);
+    const gripWidth = Number(this.ppGripWidth ?? 0);
 
     // 実行するコマンドのシーケンスを定義
     const cmds = [
@@ -625,7 +632,7 @@ export class AppState {
       `move z=${safetyZ} s=100`,
       `move x=${this.ppPickPoint.x} y=${this.ppPickPoint.y} z=${safetyZ} s=100`,
       `move z=${pickZ} s=50`,
-      "grip close",
+      `grip close ${gripWidth} s=30`, // s=30でゆっくり掴む
       "delay t=1000",
       `move z=${safetyZ} s=100`,
       `move x=${this.ppPlacePoint.x} y=${this.ppPlacePoint.y} z=${safetyZ} s=100`,
@@ -717,7 +724,7 @@ export class AppState {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        const res = await fetch("/mcp", {
+        const res = await fetch("/api/mcp", {
             method: "POST",
             body: JSON.stringify({
                 type: "call_tool",
@@ -856,6 +863,7 @@ export class AppState {
     let v: number;
     let u_norm: number;
     let v_norm: number;
+    const hoveredObject = this.ppHoveredObject; // クリック時のホバーオブジェクトをキャプチャ
 
     // ホバー中のオブジェクトがあれば、その中心をクリック位置とする
     if (this.ppHoveredObject && this.ppHoveredObject.ground_center) {
@@ -906,7 +914,7 @@ export class AppState {
       args.z = z;
     }
 
-    const response = await fetch("/mcp", {
+    const response = await fetch("/api/mcp", {
       method: "POST",
       body: JSON.stringify({ type: "call_tool", name: "convert_coordinates", arguments: args }),
       headers: { "Content-Type": "application/json" }
@@ -968,7 +976,7 @@ export class AppState {
 
     this.isPollingLogs = true;
     try {
-      const res = await fetch("/mcp", {
+      const res = await fetch("/api/mcp", {
         method: "POST",
         body: JSON.stringify({ type: "call_tool", name: "get_tool_logs", arguments: { calling_client: "web_client" }, }),
         headers: { "Content-Type": "application/json" },
@@ -1083,7 +1091,7 @@ export class AppState {
     const loop = async () => {
         if (!this.ppExecuting) { // Pick&Place実行中はポーリングしない
             try {
-                const res = await fetch("/mcp", {
+                const res = await fetch("/api/mcp", {
                     method: "POST",
                     body: JSON.stringify({ type: "call_tool", name: "get_joypad_status", arguments: {} }),
                     headers: { "Content-Type": "application/json" },
@@ -1108,10 +1116,10 @@ export class AppState {
   // ロボットのステータスを定期的にポーリングする
   startRobotStatusPolling() {
     const loop = async () => {
-        // Pick & Place実行中や他の重い処理中はポーリングしない
-        if (!this.ppExecuting && !this.capturing && !this.detecting && !this.isExecuting) {
+        // 他の重い処理中はポーリングをスキップ
+        if (!this.capturing && !this.detecting && !this.isExecuting) {
             try {
-                const res = await fetch("/mcp", {
+                const res = await fetch("/api/mcp", {
                     method: "POST",
                     body: JSON.stringify({ type: "call_tool", name: "dump", arguments: { calling_client: "web_client" } }),
                     headers: { "Content-Type": "application/json" },
@@ -1127,7 +1135,7 @@ export class AppState {
                 }
             } catch (e) {}
         }
-        setTimeout(loop, 1000); // 1秒ごとにポーリング
+        setTimeout(loop, 250); // 250msごとにポーリングしてUIの更新頻度を上げる
     };
     loop();
   }
@@ -1199,7 +1207,7 @@ export class AppState {
 
             try {
                 // MCPサーバーにツール実行をリクエスト
-                const res = await fetch("/mcp", {
+                const res = await fetch("/api/mcp", {
                     method: "POST",
                     body: JSON.stringify({ type: "call_tool", name, arguments: { ...args, calling_client: "gemini_live" } }),
                     headers: { "Content-Type": "application/json" },

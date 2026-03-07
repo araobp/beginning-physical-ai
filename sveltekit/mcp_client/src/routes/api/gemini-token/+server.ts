@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { GEMINI_LIVE_MODEL } from '$lib/gemini';
+import physics from '$lib/assets/physics.md?raw';
 
 /**
  * Gemini Liveセッション用の一時的な認証トークンを生成するAPIエンドポイント。
@@ -18,10 +19,38 @@ export async function POST({ request }) {
   try {
     // リクエストボディからツールの定義を取得
     const { tools } = await request.json();
-    // GoogleGenAIクライアントを初期化
-    const client = new GoogleGenAI({ apiKey });
-    // トークンの有効期限を現在から30分後に設定
-    const expireTime = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    // GoogleGenAIクライアントを初期化 (v1alphaを使用してプレビュー機能にアクセス)
+    const client = new GoogleGenAI({
+      apiKey,
+      httpOptions: { apiVersion: 'v1alpha' },
+    });
+    // トークンとキャッシュの有効期限（分）
+    const DURATION_MINUTES = 30;
+    // トークンの有効期限を設定
+    const expireTime = new Date(Date.now() + DURATION_MINUTES * 60 * 1000).toISOString();
+
+    // キャッシュコンテンツを作成
+    // physics.md（物理学のドメイン知識）をコンテキストとしてキャッシュします。
+    // これにより、CAG (Context-Augmented Generation) を実現し、
+    // モデルが専門知識に基づいて回答できるようにします。
+    const cache = await client.caches.create({
+      model: GEMINI_LIVE_MODEL,
+      config: {
+        displayName: 'Physics Context',
+        systemInstruction: {
+          parts: [{
+            text: "You are a helpful assistant with access to tools. Please use the available tools to answer the user's requests when appropriate. "
+          }]
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: physics }],
+          },
+        ],
+        ttl: `${DURATION_MINUTES * 60}s`, // 有効期限をトークンと合わせる
+      }
+    });
 
     // 一時的な認証トークンを作成
     const response = await client.authTokens.create({
@@ -30,7 +59,7 @@ export async function POST({ request }) {
         expireTime: expireTime, // 有効期限を設定
         // Gemini Live接続に関する制約と設定
         liveConnectConstraints: {
-          model: GEMINI_LIVE_MODEL, // 使用するモデル
+          model: cache.name, // キャッシュされたコンテンツ名をモデルとして使用
           config: {
             responseModalities: [Modality.AUDIO], // モデルの応答形式を音声に指定
             // 音声合成に関する設定
@@ -42,23 +71,16 @@ export async function POST({ request }) {
               },
             },
             // システムへの指示（プロンプト）
-            systemInstruction: {
-              parts: [{
-                text: "You are a helpful assistant with access to tools. Please use the available tools to answer the user's requests when appropriate. "
-              }]
-            },
+            // systemInstructionはキャッシュに含まれているためここでは省略
             tools: tools, // 使用可能なツールのリスト
           }
-        },
-        // HTTPリクエストのオプション
-        httpOptions: {
-          apiVersion: 'v1alpha' // 使用するAPIのバージョン
         }
       }
     });
 
     // 作成されたトークン情報をJSON形式で返す
-    return json(response);
+    // クライアントが接続すべきモデル名（キャッシュ名）も含める
+    return json({ ...response, model: cache.name });
   } catch (error: any) {
     // エラーが発生した場合はコンソールに出力し、500エラーを返す
     console.error('Error creating ephemeral token:', error);

@@ -91,6 +91,7 @@ export class GeminiLiveClient {
             const tokenData = await tokenRes.json();
             console.log("Token response data:", tokenData);
             const ephemeralToken = tokenData.name; // トークン文字列ではなくリソース名が返る場合があるが、SDKが処理する
+            const model = tokenData.model || GEMINI_LIVE_MODEL; // サーバーから指定されたモデル（キャッシュ名）を使用
             console.log("Fetched ephemeral token: ", ephemeralToken);
 
             // GoogleGenAIクライアントの初期化
@@ -101,7 +102,7 @@ export class GeminiLiveClient {
 
             // WebSocket接続の確立
             const session = await this.client.live.connect({
-                model: GEMINI_LIVE_MODEL,
+                model: model,
                 callbacks: {
                     onopen: () => {
                         console.log("Gemini Live WebSocket Connected");

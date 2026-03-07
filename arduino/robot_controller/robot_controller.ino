@@ -24,6 +24,12 @@ const float Z_OFF_J4_TCP = 8.0;  // Vertical offset from the wrist joint (J4) to
 const float OFF_J1_J2 = 15.0;    // Horizontal offset between the base rotation joint (J1) and the shoulder joint (J2).
 const float BASE_H = 56.0;       // Height of the robot's base.
 
+// --- Gripper Width to Percentage Mapping ---
+const float GRIP_WIDTH_MIN_MM = 0.0;    // Minimum grip width in mm that can be specified.
+const float GRIP_WIDTH_MAX_MM = 25.0;   // Maximum grip width in mm that can be specified.
+const int GRIP_P_FOR_MIN_WIDTH = 10;    // Servo percentage for the minimum specified width.
+const int GRIP_P_FOR_MAX_WIDTH = 50;    // Servo percentage for the maximum specified width.
+
 // --- Servo Control Configuration ---
 const int STEP_DELAY = 10;       // Delay in milliseconds between each step of an interpolated movement, controlling smoothness.
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
@@ -208,6 +214,19 @@ void executeCommand(String cmd) {
       p_val = cmd.substring(cmd.indexOf("p=")+2).toInt();
     } else if (cmd.indexOf("open") != -1) {
       p_val = 50; // 'open' keyword is equivalent to 50% open.
+    } else if (cmd.indexOf("close") != -1) {
+      // Support `grip close <width_mm>`
+      String sub = cmd.substring(cmd.indexOf("close") + 5);
+      sub.trim();
+      // Check if a width value is provided
+      if (sub.length() > 0 && (isDigit(sub.charAt(0)) || sub.charAt(0) == '-')) {
+        float width_mm = sub.toFloat();
+        width_mm = max(GRIP_WIDTH_MIN_MM, min(GRIP_WIDTH_MAX_MM, width_mm)); // Clamp width to the defined range.
+        // Linearly map the specified width (e.g., 0-25mm) to a servo percentage (e.g., 10-50%).
+        p_val = (int)(GRIP_P_FOR_MIN_WIDTH + (width_mm - GRIP_WIDTH_MIN_MM) * (GRIP_P_FOR_MAX_WIDTH - GRIP_P_FOR_MIN_WIDTH) / (GRIP_WIDTH_MAX_MM - GRIP_WIDTH_MIN_MM));
+      } else {
+        p_val = 0; // Default 'grip close' (no width specified) is 0%.
+      }
     } else { // 'close' keyword or no keyword defaults to 0%.
       p_val = 0;
     }
@@ -326,7 +345,7 @@ void executeCommand(String cmd) {
     Serial.println(F("  c<ch>=<us>                    : Direct servo control by pulse width (e.g., c0=1500)."));
     Serial.println(F(""));
     Serial.println(F("[Gripper]"));
-    Serial.println(F("  grip <p=..|open|close> [s=..] : Control gripper. p=0-100%, open=50%, close=0%. s=speed 1-100."));
+    Serial.println(F("  grip <p=..|open|close [width]> [s=..] : Control gripper. p=%, open=50%, close to [width]mm (0-25). s=speed 1-100."));
     Serial.println(F(""));
     Serial.println(F("[Calibration & Config]"));
     Serial.println(F("  calib<0|1> x=.. y=.. z=..     : Register IK calibration point (0 or 1)."));

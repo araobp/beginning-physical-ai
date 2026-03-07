@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { AppState } from "./state.svelte";
+  import { AppState } from "$lib/app-state.svelte.js";
   import CameraTab from "./components/CameraTab.svelte";
   import ControlTab from "./components/ControlTab.svelte";
   import GeminiLiveTab from "./components/GeminiLiveTab.svelte";
