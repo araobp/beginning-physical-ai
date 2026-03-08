@@ -14,6 +14,7 @@
  * - Linear interpolation for smooth servo movements.
  * - EEPROM storage for calibration data to persist across power cycles.
  * - A serial command interface for integration with a higher-level controller (e.g., a Python server).
+ * - Support for aborting command sequences via 'abort' command.
  */
 
 // --- Physical Parameters of the Robot Arm (in millimeters) ---
@@ -145,6 +146,7 @@ void moveTo(float tx, float ty, float tz, float speed) {
   for (int i = 1; i <= steps; i++) {
     float t = (float)i / steps;
     float easedT = t * t * (3.0 - 2.0 * t); // Smoothstep easing function for acceleration/deceleration.
+    
     float j1, j2, j3;
     if (calculateIK(sx+(tx-sx)*easedT, sy+(ty-sy)*easedT, sz+(tz-sz)*easedT, j1, j2, j3)) {
       moveServo(0, angleToUs(0, j1)); 
@@ -263,6 +265,7 @@ void executeCommand(String cmd) {
       s.trim();
       if (s.length() > 0) t = s.toInt();
     }
+    unsigned long start = millis();
     delay(t);
   }
   // Command: 'cmdint=...'
@@ -400,7 +403,7 @@ void setup() {
   }
   moveServo(3, (conf.grip_open + conf.grip_close) / 2); // Gripper to neutral
 
-  Serial.println(F("--- ROBOT SYSTEM v3.7 (20260305) Ready ---"));
+  Serial.println(F("--- ROBOT SYSTEM v3.8 (20260308) Ready ---"));
 }
 
 /**
@@ -423,9 +426,10 @@ void loop() {
       startIdx = delimiterIdx + 1;
       delimiterIdx = input.indexOf(';', startIdx);
     }
-    // Execute the last (or only) command in the string.
+    
     executeCommand(input.substring(startIdx));
     Serial.println(";"); // Acknowledgment for the last command.
+    
     Serial.println(("!")); // Send final prompt '!' to signal the end of the entire sequence.
   }
 }

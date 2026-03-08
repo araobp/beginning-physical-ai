@@ -57,9 +57,10 @@ export class GeminiLiveClient {
      * AudioContextの初期化、WebSocket接続の確立、および音声ストリームの開始を行います。
      *
      * @param tools - 使用可能なツールの定義配列。
+     * @param lang - 言語設定 ('ja' | 'en')
      */
-    async connect(tools: any[] = []) {
-        console.log("GeminiLiveClient: connect called with tools:", tools);
+    async connect(tools: any[] = [], lang: string = 'ja') {
+        console.log("GeminiLiveClient: connect called with tools:", tools, "lang:", lang);
         if (this.isConnected) return;
 
         // Initialize AudioContext here to capture user gesture
@@ -94,7 +95,7 @@ export class GeminiLiveClient {
             const tokenRes = await fetch('/api/gemini-token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tools: toolDefinitions })
+                body: JSON.stringify({ tools: toolDefinitions, lang })
             });
             if (!tokenRes.ok) {
                 const errText = await tokenRes.text();
@@ -103,7 +104,7 @@ export class GeminiLiveClient {
             const tokenData = await tokenRes.json();
             console.log("Token response data:", tokenData);
             const ephemeralToken = tokenData.name; // トークン文字列ではなくリソース名が返る場合があるが、SDKが処理する
-            const model = tokenData.model || GEMINI_LIVE_MODEL; // サーバーから指定されたモデル（キャッシュ名）を使用
+            const model = tokenData.model || GEMINI_LIVE_MODEL; // サーバーから指定されたモデルを使用
             console.log("Fetched ephemeral token: ", ephemeralToken);
 
             // GoogleGenAIクライアントの初期化
@@ -119,7 +120,6 @@ export class GeminiLiveClient {
                     onopen: () => {
                         console.log("Gemini Live WebSocket Connected");
                         this.isConnected = true;
-                        this.config.onConnect?.();
                         // 接続確立後にマイク入力のストリーミングを開始
                         this.startAudioStream();
                     },
@@ -139,6 +139,9 @@ export class GeminiLiveClient {
 
             // @ts-ignore
             this.session = session;
+
+            // セッションが確立され、this.sessionに代入された後に呼び出す
+            this.config.onConnect?.();
 
         } catch (e) {
             console.error("Connection failed:", e);
@@ -171,6 +174,7 @@ export class GeminiLiveClient {
      * @param text 送信するテキスト
      */
     sendText(text: string) {
+        console.log("GeminiLiveClient: sendText", text.slice(0, 50) + "...");
         // @ts-ignore
         if (this.session) {
             // @ts-ignore
@@ -181,6 +185,8 @@ export class GeminiLiveClient {
                 }],
                 turnComplete: true
             });
+        } else {
+            console.warn("GeminiLiveClient: Session is not ready. Cannot send text.");
         }
     }
 

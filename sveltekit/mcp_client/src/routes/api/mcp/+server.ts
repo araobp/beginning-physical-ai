@@ -77,10 +77,11 @@ export const GET: RequestHandler = async () => {
  */
 export const POST: RequestHandler = async ({ request }) => {
 	try {
-		// MCPクライアントのインスタンスを取得します。
-		const mcp = await getClient();
 		// リクエストボディをJSONとしてパースします。
 		const body = await request.json();
+
+		// 通常のツール呼び出しにはシングルトンクライアントを使用します。
+		const mcp = await getClient();
 
 		// リクエストタイプが 'list_tools' の場合
 		if (body.type === 'list_tools') {

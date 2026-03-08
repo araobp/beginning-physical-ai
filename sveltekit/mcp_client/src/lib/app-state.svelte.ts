@@ -126,29 +126,29 @@ export class AppState {
   /** ツールが現在実行中かどうかを示すフラグ。二重実行防止用。 */
   isExecuting = $state(false);
 
+  detectionConfidence = $state(0.7);
+
   // --- カメラ・画像認識関連の状態 ---
   /** カメラから取得した最新の静止画像（Base64エンコードされたJPEG）。 */
   cameraImage = $state<string | null>(null);
-  /** 静止画をキャプチャ中かどうかのフラグ。 */
+  /** 画像キャプチャが進行中かどうか。 */
   capturing = $state(false);
-  /** TensorFlow.jsライブラリとモデルのロードが完了したかどうか。 */
-  tfReady = $state(false);
-  /** 使用する物体検出モデルの種類 ('yolo11n', 'tensorflow.js', 'gemini-2.5-flash' 等)。 */
-  detectionModel = $state("yolo11n");
-  /** 物体検出処理が実行中かどうか。 */
-  detecting = $state(false);
-  /** ユーザーが画像上でクリックした位置を示すマーカー座標（表示用）。 */
-  targetMarker = $state<{ x: number; y: number } | null>(null);
-  /** クリックされた位置の画像座標 (u, v)。 */
-  targetImageCoords = $state<{ u: number; v: number } | null>(null);
-  /** 画像座標から変換された、ロボットの世界座標 (x, y)。 */
-  targetWorldCoords = $state<{ x: number; y: number } | null>(null);
-  /** 静止画上で検出されたオブジェクトのリスト。バウンディングボックスやラベルを含む。 */
+  /** 検出されたオブジェクトのリスト。 */
   detectedObjects = $state<any[]>([]);
-  /** 取得する画像に座標軸（X, Y, Z）を描画するかどうか。 */
+  /** 物体検出が進行中かどうか。 */
+  detecting = $state(false);
+  /** 使用する物体検出モデル。 */
+  detectionModel = $state("yolo11n");
+  /** TensorFlow.jsがロード完了したかどうか。 */
+  tfReady = $state(false);
+  /** 画像に座標軸を描画するかどうか。 */
   visualizeAxes = $state(true);
-  /** 物体検出の信頼度閾値 (0.0 - 1.0)。これ以下の信頼度の検出は無視される。 */
-  detectionConfidence = $state(0.7);
+  /** ユーザーがクリックしたターゲットマーカーの情報。 */
+  targetMarker = $state<any>(null);
+  /** ユーザーがクリックした画像のピクセル座標。 */
+  targetImageCoords = $state<{ u: number; v: number } | null>(null);
+  /** 変換後のワールド座標。 */
+  targetWorldCoords = $state<{ x: number; y: number; z: number } | null>(null);
 
   // --- Pick & Placeタブ関連の状態 ---
   /** Pick & Place用の画像ソース。ライブストリームURLまたは静止画データ。 */
@@ -1251,12 +1251,21 @@ export class AppState {
             this.playConnectedSound();
             console.log('Gemini Status:', this.geminiStatus);
             this.geminiLiveMonitorLoaded = true;
-            // 接続時に自発的に画像を取得し、ユーザーに話しかけるよう促す
-            const initialMessage = `以下はロボットアーム操作に関する物理学の教科書です。
+            // 接続時に物理学の教科書を送信し、コンテキストを共有する（暗黙的キャッシュ）
+            let initialMessage = "";
+            if (this.currentLang === 'ja') {
+                initialMessage = `以下はロボットアーム操作に関する物理学の教科書です。
 ---
 ${physics}
 ---
-この教科書を理解し、今後の操作で参照してください。`;
+この教科書を理解し、今後の操作で参照してください。冒頭、必ず「こんにちは、私はAIロボットです。」と挨拶してください。その後、「私が出来ることは。。。」と１００文字程度で続けてください。最後に「何かお手伝いできることはありますか？」で挨拶を締めてください。応答は常に日本語で行ってください。`;
+            } else {
+                initialMessage = `The following is a physics textbook regarding robot arm operation.
+---
+${physics}
+---
+Please understand this textbook and refer to it for future operations. At the beginning, please greet with "Hello, I am an AI robot." Then, continue with "What I can do is..." in about 100 characters. In the end, please say "How can I help you?" Please always respond in English.`
+            }
             this.geminiClient?.sendText(initialMessage);
         },
         onDisconnect: () => { this.geminiStatus = "Disconnected"; this.geminiMicLevel = 0; this.geminiSpeakerLevel = 0; },
@@ -1337,7 +1346,7 @@ ${physics}
             }
         }
       });
-      await this.geminiClient.connect(this.tools); // 接続を開始
+      await this.geminiClient.connect(this.tools, this.currentLang); // 接続を開始
     } else {
         // 切断時の処理
         this.clearDetectionsAndTracking();
