@@ -1,12 +1,17 @@
 <script lang="ts">
   import type { AppState } from "$lib/app-state.svelte";
   import { getColorForObject, getTextColor } from "$lib/utils";
-  import LiveButton from "./LiveButton.svelte";
+  import LiveButton from "./parts/LiveButton.svelte";
 
+  /**
+   * Gemini CLIによるロボット操作をモニタリングするためのタブコンポーネント。
+   * ライブ映像と、実行されたツールログを表示します。
+   */
   let { appState }: { appState: AppState } = $props();
 </script>
 
 <div class="container-fluid mt-1 mb-1">
+  <!-- --- ヘッダーコントロール --- -->
   <div class="row mb-3">
     <div class="col-12 d-flex align-items-center gap-3">
       <LiveButton
@@ -18,7 +23,7 @@
     </div>
   </div>
   <div class="row">
-    <!-- Left: Live Monitor -->
+    <!-- --- 左パネル: ライブモニター --- -->
     <div class="col-md-6">
       <div class="card">
         <div class="card-header">Live Monitor</div>
@@ -27,6 +32,7 @@
           style="height: 350px; overflow: hidden;"
         >
           {#if appState.cliMonitor}
+            <!-- ライブ映像 -->
             <img
               src={appState.cliMonitorImageSrc}
               alt="Gemini Monitor View"
@@ -44,7 +50,7 @@
               }}
             />
 
-            <!-- Detections Overlay -->
+            <!-- 物体検出結果のオーバーレイ表示 -->
             {#each appState.geminiDetections as obj}
               {@const color = getColorForObject(obj)}
               <div
@@ -90,7 +96,7 @@
               {/if}
             {/each}
 
-            <!-- Trajectory Overlay -->
+            <!-- 軌道のオーバーレイ表示 -->
             {#if appState.geminiTrajectoryPoints.length > 0 && appState.geminiImageDim}
               <svg
                 viewBox="0 0 {appState.geminiImageDim.w} {appState.geminiImageDim.h}"
@@ -109,6 +115,7 @@
               </svg>
             {/if}
           {:else}
+            <!-- オフライン時の表示 -->
             <div
               class="d-flex align-items-center justify-content-center h-100 blink-subtle"
               style="color: #00bb00; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
@@ -120,7 +127,7 @@
       </div>
     </div>
 
-    <!-- Right: Tool Logs -->
+    <!-- --- 右パネル: ツール実行ログ --- -->
     <div class="col-md-6">
       <div class="card" style="height: 440px;">
         <div class="card-header">Tool Execution Log</div>
@@ -164,6 +171,7 @@
 </div>
 
 <style>
+  /* --- ログ表示エリアの背景色 --- */
   .log-offline-bg {
     background-color: #f8f9fa;
   }
@@ -186,7 +194,7 @@
     border-bottom-color: #222;
   }
 
-  /* Animations */
+  /* --- アニメーション --- */
   @keyframes monitor-turn-on {
     0% { transform: scale(0.2, 0.002); opacity: 0; filter: brightness(0) contrast(2); }
     10% { transform: scale(0.2, 0.002); opacity: 1; filter: brightness(5) contrast(2); }

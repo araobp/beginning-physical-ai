@@ -23,17 +23,29 @@ export interface GeminiLiveConfig {
  * 音声の入出力、WebSocket接続の確立と維持、およびサーバーからのメッセージのハンドリングを行います。
  */
 export class GeminiLiveClient {
+    /** 設定オブジェクト。コールバック関数などを含む。 */
     private config: GeminiLiveConfig;
+    /** Google GenAI SDKのクライアントインスタンス。 */
     private client: GoogleGenAI | null = null;
+    /** 確立されたGemini Liveセッション。 */
     private session: any = null;
+    /** Web Audio APIのコンテキスト。音声処理の基盤。 */
     private audioContext: AudioContext | null = null;
+    /** マイクからのメディアストリーム。 */
     private mediaStream: MediaStream | null = null;
+    /** 音声処理を行うAudioWorkletノード（PCM変換など）。 */
     private audioProcessor: AudioWorkletNode | null = null;
+    /** 入力音声（マイク）の波形分析用ノード。 */
     private inputAnalyser: AnalyserNode | null = null;
+    /** 出力音声（スピーカー）の波形分析用ノード。 */
     private outputAnalyser: AnalyserNode | null = null;
+    /** 音量レベルを定期的に報告するためのタイマーID。 */
     private volumeInterval: any = null;
+    /** 次に再生する音声バッファの開始予定時刻。途切れのない再生のために使用。 */
     private nextStartTime: number = 0;
+    /** 現在接続中かどうかのフラグ。 */
     private isConnected: boolean = false;
+    /** 現在再生中の音声ソースノードのセット。中断時に停止するために管理。 */
     private audioSources: Set<AudioBufferSourceNode> = new Set();
 
     constructor(config: GeminiLiveConfig) {
@@ -152,6 +164,49 @@ export class GeminiLiveClient {
             this.session = null;
         }
         this.config.onDisconnect?.();
+    }
+
+    /**
+     * テキストメッセージを送信します。
+     * @param text 送信するテキスト
+     */
+    sendText(text: string) {
+        // @ts-ignore
+        if (this.session) {
+            // @ts-ignore
+            this.session.sendClientContent({
+                turns: [{
+                    role: 'user',
+                    parts: [{ text: text }]
+                }],
+                turnComplete: true
+            });
+        }
+    }
+
+    /**
+     * 静止画メッセージを送信します。
+     * 会話の一部として画像を提示する場合に使用します。
+     * @param base64 Base64エンコードされた画像データ
+     * @param mimeType MIMEタイプ (例: "image/jpeg")
+     */
+    sendImage(base64: string, mimeType: string) {
+        // @ts-ignore
+        if (this.session) {
+            // @ts-ignore
+            this.session.sendClientContent({
+                turns: [{
+                    role: 'user',
+                    parts: [{
+                        inlineData: {
+                            mimeType: mimeType,
+                            data: base64
+                        }
+                    }]
+                }],
+                turnComplete: true
+            });
+        }
     }
 
     /**
@@ -294,6 +349,7 @@ export class GeminiLiveClient {
      * AudioWorkletProcessorのコードを文字列として返します。
      * このプロセッサは、入力された浮動小数点オーディオデータを16ビット整数（PCM）に変換し、
      * バッファリングしてメインスレッドに送信します。
+     * @returns AudioWorkletProcessorのソースコード文字列
      */
     private getAudioWorkletCode() {
         return `
@@ -335,6 +391,8 @@ export class GeminiLiveClient {
 
     /**
      * ArrayBufferをBase64文字列に変換します。
+     * @param buffer 変換対象のArrayBuffer
+     * @returns Base64エンコードされた文字列
      */
     private arrayBufferToBase64(buffer: ArrayBuffer) {
         let binary = '';
@@ -348,6 +406,7 @@ export class GeminiLiveClient {
 
     /**
      * サーバーからのメッセージを処理し、適切なアクション（音声再生、テキスト表示、ツール呼び出しなど）を実行します。
+     * @param msg サーバーから受信したメッセージオブジェクト
      */
     private async handleMessage(msg: any) {
         console.log("GeminiLiveClient: handleMessage", msg);
@@ -406,6 +465,7 @@ export class GeminiLiveClient {
 
     /**
      * サーバーからのツール呼び出し要求を処理し、結果をサーバーに返送します。
+     * @param toolCall サーバーから受信したtoolCallオブジェクト
      */
     private async handleToolCall(toolCall: any) {
         const functionCalls = toolCall.functionCalls;
@@ -446,6 +506,7 @@ export class GeminiLiveClient {
     /**
      * 受信したBase64形式の音声データをデコードし、再生します。
      * 連続した音声ストリームとして再生するために、再生時間をスケジューリングします。
+     * @param base64Data Base64エンコードされたPCM音声データ
      */
     private playAudio(base64Data: string) {
         if (!this.audioContext) return;

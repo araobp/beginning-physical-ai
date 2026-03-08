@@ -1,10 +1,15 @@
 <script lang="ts">
   import type { AppState, Tool } from "$lib/app-state.svelte";
 
+  /**
+   * MCPサーバーが提供するツールの一覧を表示し、手動実行するためのタブコンポーネント。
+   * 各ツールの詳細（名前、説明、スキーマ）を確認し、実行モーダルを開くことができます。
+   */
   let { appState }: { appState: AppState } = $props();
 </script>
 
 {#if appState.error}
+  <!-- --- エラー表示 --- -->
   <div
     class="alert alert-danger d-flex justify-content-between align-items-center"
     role="alert"
@@ -15,6 +20,7 @@
     >
   </div>
 {:else if appState.tools.length === 0}
+  <!-- --- 読み込み中 / ツールなし --- -->
   <div class="d-flex align-items-center gap-2 p-3">
     <p class="mb-0">{appState.t.loading_tools}</p>
     <button class="btn btn-sm btn-outline-primary" onclick={() => appState.loadTools()}
@@ -22,6 +28,7 @@
     >
   </div>
 {:else}
+  <!-- --- ツール一覧 --- -->
   <div class="d-flex justify-content-end mb-2">
     <button class="btn btn-sm btn-outline-secondary" onclick={() => appState.loadTools()}
       >Refresh Tools</button

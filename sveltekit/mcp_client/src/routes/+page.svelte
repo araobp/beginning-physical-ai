@@ -8,10 +8,18 @@
   import ToolsTab from "./components/ToolsTab.svelte";
   import SettingsTab from "./components/SettingsTab.svelte";
 
-  
+  /**
+   * アプリケーションのメインページコンポーネント。
+   * 各機能（カメラ、制御、Gemini連携、ツール、設定）をタブで切り替えて表示します。
+   * アプリケーション全体の状態（AppState）を初期化し、子コンポーネントに提供します。
+   */
   const appState = new AppState();
 
   // --- Lifecycle Hooks ---
+  /**
+   * コンポーネントのマウント時に実行される処理。
+   * SSE (Server-Sent Events) の接続を確立し、アプリケーションの状態を初期化します。
+   */
   onMount(() => {
     let mounted = true;
     let cleanupFn = () => {};

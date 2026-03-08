@@ -4,6 +4,11 @@
   
   let { appState }: { appState: AppState } = $props();
 
+  /**
+   * 画像クリック時のイベントハンドラ。
+   * クリックされた位置のピクセル座標を計算し、ワールド座標への変換をリクエストします。
+   * @param event マウスイベント
+   */
   function handleImageClick(event: MouseEvent & { currentTarget: HTMLImageElement }) {
     const img = event.currentTarget;
     const rect = img.getBoundingClientRect();

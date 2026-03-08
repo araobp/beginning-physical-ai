@@ -1,10 +1,14 @@
 <script lang="ts">
   import type { AppState } from "$lib/app-state.svelte";
 
+  /**
+   * アプリケーションの言語設定やUIテーマを管理するためのタブコンポーネント。
+   */
   let { appState }: { appState: AppState } = $props();
 </script>
 
 <div class="p-3">
+  <!-- --- 言語設定 --- -->
   <div class="mb-3">
     <label for="langSelect" class="form-label">{appState.t.settings_lang}</label>
     <select
@@ -16,6 +20,7 @@
       <option value="en">English</option>
     </select>
   </div>
+  <!-- --- テーマ設定 --- -->
   <div class="mb-3">
     <label class="form-label">{appState.t.theme_settings}</label>
     <div class="btn-group" role="group" aria-label="Theme selector">

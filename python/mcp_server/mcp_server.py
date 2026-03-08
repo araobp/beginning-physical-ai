@@ -231,18 +231,21 @@ def _fetch_workpiece_data():
                 class_label = row['class_label']
                 # CSVのカラム名に合わせてデータを取得し、欠損値にはデフォルトを設定
                 height_val = float(row.get('gripping_height', 0))
+                target_val = row.get('target', 'no')
 
                 if LANG == 'en':
                     workpieces[class_label] = {
                         "name": row['name_en'],
                         "gripping_height": height_val,
-                        "description": row['description_en']
+                        "description": row['description_en'],
+                        "target": target_val
                     }
                 else:
                     workpieces[class_label] = {
                         "name": row['name_ja'],
                         "gripping_height": height_val,
-                        "description": row['description_ja']
+                        "description": row['description_ja'],
+                        "target": target_val
                     }
     except FileNotFoundError:
         print(f"Warning: {csv_path} not found. Returning empty catalog.")
@@ -373,6 +376,7 @@ TOOL_DOCS = {
 
     [Instructions for AI]
     When planning to manipulate objects (e.g., pick and place), **always execute this tool first** to understand the exact "gripping_height" to avoid collisions.
+    Objects marked with `target: "yes"` are the intended targets for robot arm manipulation.
 
     """,
         'execute_sequence': f"""
@@ -483,6 +487,7 @@ TOOL_DOCS = {
 
     【AIへの指示】
     ロボットアームで物体を操作する計画（ピック＆プレイスなど）を立てる際には、対象物の正確な「把持高さ(gripping_height)」を把握するため、**必ず最初にこのツールを実行してください。**
+    カタログ内で `target: "yes"` となっている物体が、ロボットアームによる移動操作の対象となります。
 
     """,
         'execute_sequence': f"""

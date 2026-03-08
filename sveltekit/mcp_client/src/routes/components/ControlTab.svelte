@@ -1,14 +1,19 @@
 <script lang="ts">
   import { AppState, MAX_GRIP_WIDTH } from "$lib/app-state.svelte.js";
   import { getColorForObject, getTextColor } from "$lib/utils";
-  import LiveButton from "./LiveButton.svelte";
+  import LiveButton from "./parts/LiveButton.svelte";
 
+  /**
+   * ロボットアームの手動・半自動制御を行うためのタブコンポーネント。
+   * Pick & Placeの座標設定、ライブ映像の表示、ジョイパッドの状態表示などを提供します。
+   */
   let { appState }: { appState: AppState } = $props();
 </script>
 
 <div class="d-flex flex-column align-items-center mt-2">
-  <!-- Control Panel -->
+  <!-- --- コントロールパネル --- -->
   <div class="d-flex flex-column gap-2 mb-2 w-100 align-items-center">
+    <!-- 上段: ライブ切り替え、クリア、実行ボタン -->
     <div class="d-flex gap-2 flex-wrap justify-content-center">
       <div class="border rounded p-2 d-flex align-items-center bg-light shadow-sm gap-2">
         <LiveButton 
@@ -24,6 +29,7 @@
           {appState.ppExecuting ? appState.t.running : appState.t.pick_place}
         </button>
       </div>
+      <!-- 物体検出設定 -->
       <div class="border rounded p-2 d-flex align-items-center bg-light shadow-sm gap-3 flex-wrap justify-content-center">
         <div class="form-check form-switch mb-0" style="font-size: 0.9em;">
           <input class="form-check-input" type="checkbox" role="switch" id="ppShowDetectionsSwitch" bind:checked={appState.ppShowDetections} />
@@ -35,6 +41,7 @@
         </div>
       </div>
     </div>
+    <!-- 下段: 軌道表示設定、Z座標・把持幅設定 -->
     <div class="d-flex gap-2 flex-wrap justify-content-center">
       <div class="border rounded p-2 d-flex align-items-center bg-light shadow-sm gap-3 flex-wrap justify-content-center">
         <div class="form-check form-switch mb-0" style="font-size: 0.9em;">
@@ -55,11 +62,13 @@
     </div>
   </div>
 
+  <!-- --- メインビュー (ライブ映像/静止画) --- -->
   {#if appState.ppImage}
     <div class="position-relative d-inline-block" onmousemove={(e) => appState.handlePPMouseMove(e)} onmouseleave={() => appState.handlePPMouseLeave()} role="group">
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
       <img src={appState.ppImage} alt="Pick & Place View" class="img-fluid border rounded" style="max-height: 55vh; cursor: crosshair;" onclick={(e) => appState.handlePPImageClick(e)} onload={(e) => { const img = e.currentTarget as HTMLImageElement; appState.ppImageDim = { w: img.naturalWidth, h: img.naturalHeight }; }} />
 
+      <!-- 検出されたオブジェクトのオーバーレイ表示 -->
       {#if appState.ppShowDetections}
         {#each appState.ppDetections as obj}
           {@const color = getColorForObject(obj)}
@@ -103,6 +112,7 @@
         {/each}
       {/if}
 
+      <!-- 軌道の表示 -->
       {#if appState.ppShowTrajectory && appState.ppTrajectoryPoints.length > 0 && appState.ppImageDim}
         <svg viewBox="0 0 {appState.ppImageDim.w} {appState.ppImageDim.h}" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 4;">
           <polyline points={appState.ppTrajectoryPoints.map((p) => `${p.u},${p.v}`).join(" ")} fill="none" stroke="deeppink" stroke-width="3" stroke-dasharray="5,5" />
@@ -112,6 +122,7 @@
         </svg>
       {/if}
 
+      <!-- Pickポイントマーカー -->
       {#if appState.ppPickPoint}
         {@const pt = appState.ppPickPoint}
         <div style="position: absolute; left: {pt.u_norm * 100}%; top: {pt.v_norm * 100}%; transform: translate(-50%, -50%); pointer-events: none;">
@@ -122,6 +133,7 @@
         </div>
       {/if}
 
+      <!-- Placeポイントマーカー -->
       {#if appState.ppPlacePoint}
         {@const pt = appState.ppPlacePoint}
         <div style="position: absolute; left: {pt.u_norm * 100}%; top: {pt.v_norm * 100}%; transform: translate(-50%, -50%); pointer-events: none;">
@@ -132,6 +144,7 @@
         </div>
       {/if}
 
+      <!-- ロボットステータス (TCP座標、関節角度) -->
       {#if appState.robotStatus}
         <div style="position: absolute; top: 2px; left: 2px; right: 2px; background: rgba(0, 0, 0, 0.6); color: white; padding: 4px 8px; font-family: monospace; font-size: 0.8em; z-index: 10; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top-left-radius: var(--bs-border-radius); border-top-right-radius: var(--bs-border-radius);">
            <span class="fw-bold">TCP:</span> X={appState.robotStatus.tcp.x.toFixed(1)} Y={appState.robotStatus.tcp.y.toFixed(1)} Z={appState.robotStatus.tcp.z.toFixed(1)}
@@ -148,7 +161,7 @@
     </div>
   {/if}
 
-  <!-- Joypad Visualization -->
+  <!-- --- ジョイパッド状態の可視化 --- -->
   <div class="d-flex flex-column align-items-center mt-2 mb-1 p-1 border rounded bg-light">
     <div class="d-flex gap-4 justify-content-center">
       <div class="joypad-stick">

@@ -1,5 +1,6 @@
 import { env } from "$env/dynamic/public";
-import { GeminiLiveClient } from "$lib/gemini";
+import { GeminiLiveClient } from "./geminiLive";
+import physics from '$lib/assets/physics.md?raw';
 
 // MCPサーバーが提供するツールのインターフェース定義
 export interface Tool {
@@ -112,72 +113,131 @@ const translations = {
 // アプリケーション全体の状態を管理するクラス
 export class AppState {
   // --- ツール関連の状態 ---
-  tools = $state<Tool[]>([]); // 利用可能なツールの一覧
-  error = $state<string | null>(null); // ツール読み込み時のエラーメッセージ
-  selectedTool = $state<Tool | null>(null); // 現在選択されているツール
-  toolArgs = $state<Record<string, any>>({}); // 選択されたツールの引数
-  executionResult = $state<{ text?: string; image?: string } | null>(null); // ツールの実行結果
-  isExecuting = $state(false); // ツールが実行中かどうかのフラグ
+  /** 利用可能なMCPツールの一覧。サーバーから動的にロードされます。 */
+  tools = $state<Tool[]>([]);
+  /** ツール読み込み時や実行時に発生したエラーメッセージ。 */
+  error = $state<string | null>(null);
+  /** UIで現在選択されている、実行待ちのツール。 */
+  selectedTool = $state<Tool | null>(null);
+  /** 選択されたツールの引数入力値。キーは引数名。 */
+  toolArgs = $state<Record<string, any>>({});
+  /** ツールの実行結果（テキストまたは画像）。 */
+  executionResult = $state<{ text?: string; image?: string } | null>(null);
+  /** ツールが現在実行中かどうかを示すフラグ。二重実行防止用。 */
+  isExecuting = $state(false);
 
   // --- カメラ・画像認識関連の状態 ---
-  cameraImage = $state<string | null>(null); // カメラから取得した静止画像（Base64）
-  capturing = $state(false); // 静止画をキャプチャ中かどうかのフラグ
-  tfReady = $state(false); // TensorFlow.jsが利用可能かどうかのフラグ
-  detectionModel = $state("yolo11n"); // 使用する物体検出モデル
-  detecting = $state(false); // 物体検出中かどうかのフラグ
-  targetMarker = $state<{ x: number; y: number } | null>(null); // ユーザーがクリックした位置のマーカー（UI用）
-  targetImageCoords = $state<{ u: number; v: number } | null>(null); // クリックされた画像のピクセル座標
-  targetWorldCoords = $state<{ x: number; y: number } | null>(null); // ピクセル座標から変換されたロボットのワールド座標
-  detectedObjects = $state<any[]>([]); // 静止画上で検出されたオブジェクトのリスト
-  visualizeAxes = $state(true); // 画像に座標軸を可視化するかのフラグ
-  detectionConfidence = $state(0.7); // 物体検出の信頼度の閾値
+  /** カメラから取得した最新の静止画像（Base64エンコードされたJPEG）。 */
+  cameraImage = $state<string | null>(null);
+  /** 静止画をキャプチャ中かどうかのフラグ。 */
+  capturing = $state(false);
+  /** TensorFlow.jsライブラリとモデルのロードが完了したかどうか。 */
+  tfReady = $state(false);
+  /** 使用する物体検出モデルの種類 ('yolo11n', 'tensorflow.js', 'gemini-2.5-flash' 等)。 */
+  detectionModel = $state("yolo11n");
+  /** 物体検出処理が実行中かどうか。 */
+  detecting = $state(false);
+  /** ユーザーが画像上でクリックした位置を示すマーカー座標（表示用）。 */
+  targetMarker = $state<{ x: number; y: number } | null>(null);
+  /** クリックされた位置の画像座標 (u, v)。 */
+  targetImageCoords = $state<{ u: number; v: number } | null>(null);
+  /** 画像座標から変換された、ロボットの世界座標 (x, y)。 */
+  targetWorldCoords = $state<{ x: number; y: number } | null>(null);
+  /** 静止画上で検出されたオブジェクトのリスト。バウンディングボックスやラベルを含む。 */
+  detectedObjects = $state<any[]>([]);
+  /** 取得する画像に座標軸（X, Y, Z）を描画するかどうか。 */
+  visualizeAxes = $state(true);
+  /** 物体検出の信頼度閾値 (0.0 - 1.0)。これ以下の信頼度の検出は無視される。 */
+  detectionConfidence = $state(0.7);
 
   // --- Pick & Placeタブ関連の状態 ---
-  ppImage = $state<string | null>(null); // Pick & Place用のライブストリーム画像URLまたは静止画
+  /** Pick & Place用の画像ソース。ライブストリームURLまたは静止画データ。 */
+  ppImage = $state<string | null>(null);
   ppCapturing = $state(false); // (未使用の可能性)
-  ppPickPoint = $state<any>(null); // ピックアップする地点の座標情報
-  ppPlacePoint = $state<any>(null); // プレースする地点の座標情報
-  ppExecuting = $state(false); // Pick & Placeシーケンスが実行中かどうかのフラグ
-  ppPickZ = $state(10); // ピックアップ時のZ座標 (mm)
-  ppPlaceZ = $state(30); // プレース時のZ座標 (mm)
-  ppSafetyZ = $state(70); // 安全な高さのZ座標 (mm)
-  ppGripWidth = $state(0); // 把持時のグリッパー幅 (mm)。0で完全クローズ。
-  ppLive = $state(false); // ライブストリーム表示中かどうかのフラグ
-  ppShowDetections = $state(false); // ライブストリーム上で物体検出を有効にするかのフラグ
-  ppDetections = $state<any[]>([]); // ライブストリーム上で検出されたオブジェクト
-  ppDetectionPolling = $state(false); // 物体検出のポーリング中かどうかのフラグ
-  ppDetectionTimeout: any = null; // 物体検出ポーリングのタイマーID
-  ppShowTrajectory = $state(false); // Pick & Placeの軌道を表示するかのフラグ
-  ppHoveredObject = $state<any>(null); // マウスがホバーしているオブジェクト
-  ppTrajectoryPoints = $state<{ u: number; v: number }[]>([]); // 表示用の軌道（2D画像座標）
+  /** ピックアップ地点の座標情報（画像座標、マーカー座標、世界座標を含む）。 */
+  ppPickPoint = $state<any>(null);
+  /** プレース地点の座標情報。 */
+  ppPlacePoint = $state<any>(null);
+  /** Pick & Placeシーケンスが現在実行中かどうか。 */
+  ppExecuting = $state(false);
+  /** ピックアップ時のZ座標（高さ）(mm)。 */
+  ppPickZ = $state(10);
+  /** プレース時のZ座標（高さ）(mm)。 */
+  ppPlaceZ = $state(30);
+  /** 移動時の安全な高さのZ座標 (mm)。 */
+  ppSafetyZ = $state(70);
+  /** 把持時のグリッパー幅 (mm)。0で完全クローズ。 */
+  ppGripWidth = $state(0);
+  /** Pick & Placeタブでライブストリームを表示中かどうか。 */
+  ppLive = $state(false);
+  /** ライブストリーム上でリアルタイム物体検出を有効にするかどうか。 */
+  ppShowDetections = $state(false);
+  /** ライブストリーム上で検出されたオブジェクトのリスト。 */
+  ppDetections = $state<any[]>([]);
+  /** 物体検出のポーリングが進行中かどうか。 */
+  ppDetectionPolling = $state(false);
+  /** 物体検出ポーリングのタイマーID。停止時に使用。 */
+  ppDetectionTimeout: any = null;
+  /** Pick & Placeの予定軌道を画面上に描画するかどうか。 */
+  ppShowTrajectory = $state(false);
+  /** マウスカーソル下にある検出オブジェクト。ハイライト表示用。 */
+  ppHoveredObject = $state<any>(null);
+  /** 画面上に描画する軌道の点群（画像座標系）。 */
+  ppTrajectoryPoints = $state<{ u: number; v: number }[]>([]);
   ppImageDim = $state<{ w: number; h: number } | null>(null); // (未使用の可能性)
-  joypadLeft = $state({ x: 0, y: 0 }); // 左ジョイパッドの状態
-  joypadRight = $state({ x: 0, y: 0 }); // 右ジョイパッドの状態
-  lastPPMousePosition = $state<{ x: number; y: number } | null>(null); // Pick & Place画像上での最後のマウス位置
-  robotStatus = $state<any>(null); // ロボットのステータス (TCP, Joints)
+  /** 左ジョイパッド（仮想または物理）の入力状態。 */
+  joypadLeft = $state({ x: 0, y: 0 });
+  /** 右ジョイパッドの入力状態。 */
+  joypadRight = $state({ x: 0, y: 0 });
+  /** Pick & Place画像上での最後のマウス位置。ホバー判定に使用。 */
+  lastPPMousePosition = $state<{ x: number; y: number } | null>(null);
+  /** ロボットの現在のステータス（TCP座標、関節角度など）。定期的に更新される。 */
+  robotStatus = $state<any>(null);
   
   // --- Geminiモニター関連の状態 ---
-  geminiLive = $state(false); // Gemini Liveが有効かどうかのフラグ
-  cliMonitor = $state(false); // Gemini CLIモニターが有効かどうかのフラグ
-  geminiLogs = $state<any[]>([]); // MCPサーバーから取得したツール実行ログ
-  geminiDetections = $state<any[]>([]); // Geminiモニターで表示する検出オブジェクト
-  geminiTrajectoryPoints = $state<any[]>([]); // Geminiモニターで表示する軌道
+  /** Gemini Live（音声対話）機能が有効かどうか。 */
+  geminiLive = $state(false);
+  /** Gemini CLIモニター（テキストベースの自動操作監視）が有効かどうか。 */
+  cliMonitor = $state(false);
+  /** MCPサーバーから取得したツール実行ログのリスト。 */
+  geminiLogs = $state<any[]>([]);
+  /** Geminiモニター画面で表示する検出オブジェクト（ログから解析）。 */
+  geminiDetections = $state<any[]>([]);
+  /** Geminiモニター画面で表示する軌道（ログから解析）。 */
+  geminiTrajectoryPoints = $state<any[]>([]);
   geminiImageDim = $state<{ w: number; h: number } | null>(null); // (未使用の可能性)
-  geminiClient = $state<GeminiLiveClient | null>(null); // Gemini Liveクライアントのインスタンス
-  geminiMicLevel = $state(0); // マイクの音量レベル
-  geminiSpeakerLevel = $state(0); // スピーカーの音量レベル
-  geminiStatus = $state("Disconnected"); // Gemini Liveの接続状態
-  geminiLiveLog = $state<any[]>([]); // Gemini Liveの対話ログ
-  geminiInterimTranscript = $state(""); // Gemini Liveの音声認識の中間結果
-  cliMonitorLoaded = $state(false); // CLIモニターの画像が読み込まれたかのフラグ
-  cliMonitorImageSrc = $state<string | null>(null); // CLIモニターの画像ソースURL
-  geminiLiveMonitorLoaded = $state(false); // Gemini Liveモニターの画像が読み込まれたかのフラグ
-  geminiLiveMonitorImageSrc = $state<string | null>(null); // Gemini Liveモニターの画像ソースURL
-  isPollingLogs = $state(false); // ログのポーリング中かどうかのフラグ
+  /** Gemini Live APIとの通信を行うクライアントインスタンス。 */
+  geminiClient = $state<GeminiLiveClient | null>(null);
+  /** マイクの入力音量レベル (0.0 - 1.0)。UIのビジュアライザー用。 */
+  geminiMicLevel = $state(0);
+  /** スピーカーの出力音量レベル (0.0 - 1.0)。 */
+  geminiSpeakerLevel = $state(0);
+  /** Gemini Liveの接続状態ステータス文字列。 */
+  geminiStatus = $state("Disconnected");
+  /**
+   * Gemini Liveの対話およびツール実行の履歴ログ。
+   * ユーザーの発言、モデルの応答、およびAIが実行したツール（名前、引数、結果）の
+   * 一連の流れ（推論パス）を記録し、UIに表示するために使用されます。
+   */
+  geminiLiveLog = $state<any[]>([]); 
+  /** Gemini Liveの音声認識の中間結果（確定前のテキスト）。 */
+  geminiInterimTranscript = $state("");
+  /** CLIモニターの画像が読み込まれたかどうか。 */
+  cliMonitorLoaded = $state(false);
+  /** CLIモニターの画像ソースURL。 */
+  cliMonitorImageSrc = $state<string | null>(null);
+  /** Gemini Liveモニターの画像が読み込まれたかどうか。 */
+  geminiLiveMonitorLoaded = $state(false);
+  /** Gemini Liveモニターの画像ソースURL。 */
+  geminiLiveMonitorImageSrc = $state<string | null>(null);
+  /** ログのポーリングが進行中かどうか。 */
+  isPollingLogs = $state(false);
 
   // --- 設定関連の状態 ---
-  currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "spaceship"); // 現在のUIテーマ
-  currentLang = $state<Lang>((env.PUBLIC_MCP_LANGUAGE as Lang) || "ja"); // 現在の言語
+  /** 現在のUIテーマ ('default' または 'spaceship')。 */
+  currentTheme = $state((env.PUBLIC_MCP_THEME as string) || "spaceship");
+  /** 現在の表示言語 ('ja' または 'en')。 */
+  currentLang = $state<Lang>((env.PUBLIC_MCP_LANGUAGE as Lang) || "ja");
 
   // 派生状態: 現在の言語に応じた翻訳テキスト
   t = $derived(translations[this.currentLang]);
@@ -236,7 +296,7 @@ export class AppState {
     });
   }
 
-  // アプリケーションの初期化処理
+  // アプリケーションの初期化処理。ツール一覧の取得、ロボットの初期位置への移動、TFJSのロードなどを順次行う。
   async init() {
     await this.loadTools(); // ツール一覧を読み込む
     await this.executeSingleCommand("move x=110 y=0 z=70 s=50"); // ロボットを初期位置に移動
@@ -245,7 +305,7 @@ export class AppState {
     this.startRobotStatusPolling(); // ロボットステータスのポーリングを開始
   }
 
-  // TensorFlow.jsとCOCO-SSDモデルを動的にロードする
+  // TensorFlow.jsとCOCO-SSDモデルを動的にロードする。ブラウザ環境でのみ実行される。
   loadTFJS() {
     if (typeof document === 'undefined') return;
     const tfScript = document.createElement("script");
@@ -263,7 +323,7 @@ export class AppState {
     document.head.appendChild(tfScript);
   }
 
-  // MCPサーバーから利用可能なツールの一覧を読み込む
+  // MCPサーバーから利用可能なツールの一覧を読み込み、`tools` 状態を更新する。
   async loadTools() {
     try {
       const res = await fetch("/api/mcp", {
@@ -282,7 +342,7 @@ export class AppState {
     }
   }
 
-  // 単一のコマンド文字列をMCPサーバーに送信して実行する
+  // 単一のコマンド文字列をMCPサーバーの `execute_sequence` ツール経由で送信して実行する。
   async executeSingleCommand(cmd: string) {
     try {
       await fetch("/api/mcp", {
@@ -299,7 +359,7 @@ export class AppState {
     }
   }
 
-  // カメラから静止画をキャプチャする
+  // カメラから静止画をキャプチャする。`get_live_image` ツールを使用する。
   async captureImage() {
     this.capturing = true;
     // 関連する状態をリセット
@@ -331,7 +391,7 @@ export class AppState {
     }
   }
 
-  // MCPサーバーからの画像を含むレスポンスをパースして画像データを抽出する
+  // MCPサーバーからの画像を含むレスポンスをパースして画像データ(Base64)を抽出するヘルパー関数。
   parseImageResult(result: any, callback: (img: string) => void) {
     if (result.content && Array.isArray(result.content)) {
       for (const content of result.content) {
@@ -352,7 +412,8 @@ export class AppState {
     }
   }
 
-  // 選択されたモデルを使用して物体検出を実行する
+  // 選択されたモデルを使用して物体検出を実行する。
+  // モデルに応じて、クライアントサイド(TFJS)またはサーバーサイド(YOLO, Gemini)で処理を行う。
   async detectObjects() {
     if (this.detectionModel === "tensorflow.js") {
       // TensorFlow.jsを使用したクライアントサイドでの検出
@@ -519,7 +580,8 @@ export class AppState {
     }
   }
 
-  // 画像のピクセル座標をワールド座標に変換する
+  // 画像のピクセル座標をワールド座標に変換し、`targetWorldCoords` を更新する。
+  // `convert_coordinates` ツールを使用する。
   async convertImageCoordsToWorld(u: number, v: number) {
     try {
       const res = await fetch("/api/mcp", {
@@ -546,7 +608,7 @@ export class AppState {
     }
   }
 
-  // ツール実行用のモーダルを開く
+  // ツール実行用のモーダルを開き、選択されたツールの引数入力フォームを初期化する。
   openToolModal(tool: Tool) {
     this.selectedTool = tool;
     this.toolArgs = {};
@@ -566,7 +628,7 @@ export class AppState {
     }
   }
 
-  // 選択されたツールを実行する
+  // モーダルで設定された引数を使用して、選択されたツールを実行する。
   async executeTool() {
     if (!this.selectedTool) return;
     this.isExecuting = true;
@@ -616,7 +678,8 @@ export class AppState {
     }
   }
 
-  // Pick & Placeシーケンスを実行する
+  // 設定されたPickポイントとPlaceポイントに基づいて、Pick & Placeシーケンスを実行する。
+  // 安全高さへの移動、把持、移動、配置、ホームポジションへの復帰を含む一連のコマンドを生成・実行する。
   async runPickAndPlace() {
     if (!this.ppPickPoint || !this.ppPlacePoint) return;
     this.ppExecuting = true;
@@ -654,17 +717,19 @@ export class AppState {
         alert(`Error: ${e.message}`);
       } finally {
         this.ppExecuting = false;
+        this.clearPPPoints();
       }
     })();
   }
 
-  // Pick & Placeのポイントをクリアする
+  // Pick & Placeのポイント設定（Pick/Place）をクリアする。
   clearPPPoints() {
     this.ppPickPoint = null;
     this.ppPlacePoint = null;
   }
 
-  // 検出結果や追跡情報など、関連する視覚情報をクリアする
+  // 検出結果、追跡情報、ログなど、画面上の動的な視覚情報をすべてクリアする。
+  // モード切替時などに使用される。
   clearDetectionsAndTracking() {
     this.detectedObjects = [];
     this.targetMarker = null;
@@ -681,7 +746,7 @@ export class AppState {
     this.geminiLiveMonitorImageSrc = null;
   }
 
-  // Pick & Place画像上でのマウス移動イベントを処理する
+  // Pick & Place画像上でのマウス移動イベントを処理し、ホバー中のオブジェクトを特定する。
   handlePPMouseMove(event: MouseEvent) {
     const target = event.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -696,13 +761,13 @@ export class AppState {
     this.updatePPHover();
   }
 
-  // マウスがPick & Place画像から離れたときの処理
+  // マウスがPick & Place画像から離れたときの処理。ホバー状態を解除する。
   handlePPMouseLeave() {
     this.lastPPMousePosition = null;
     this.ppHoveredObject = null;
   }
 
-  // Pick & Placeのライブストリーム表示を切り替える
+  // Pick & Placeのライブストリーム表示（MJPEG）を切り替える。
   async toggleLive() {
     this.ppLive = !this.ppLive;
     if (this.ppLive) {
@@ -716,7 +781,8 @@ export class AppState {
     }
   }
 
-  // ライブストリーム上で物体検出を定期的に実行（ポーリング）
+  // ライブストリーム上で物体検出を定期的に実行（ポーリング）する。
+  // `get_live_image` ツールを画像取得なしモードで呼び出し、検出結果のみを取得する。
   async pollDetections() {
     if (!this.ppLive || !this.ppShowDetections || this.ppDetectionPolling) return;
     this.ppDetectionPolling = true;
@@ -759,7 +825,7 @@ export class AppState {
     }
   }
 
-  // マウスカーソルがどの検出オブジェクト上にあるかを更新する
+  // マウスカーソルがどの検出オブジェクト上にあるかを判定し、`ppHoveredObject` を更新する。
   updatePPHover() {
     if (!this.lastPPMousePosition || !this.ppShowDetections) {
       this.ppHoveredObject = null;
@@ -780,7 +846,8 @@ export class AppState {
     this.ppHoveredObject = found;
   }
 
-  // Pick & Placeの軌道を計算して更新する
+  // Pick & Placeの予定軌道を計算して更新する。
+  // 3D空間上の経由点を生成し、それらを画像上の2D座標に変換して `ppTrajectoryPoints` に設定する。
   async updateTrajectory() {
     if (!this.ppPickPoint || !this.ppPlacePoint) {
         this.ppTrajectoryPoints = [];
@@ -852,7 +919,9 @@ export class AppState {
     this.ppTrajectoryPoints = points2D;
   }
 
-  // Pick & Place画像がクリックされたときの処理
+  // Pick & Place画像がクリックされたときの処理。
+  // クリック位置の座標変換を行い、PickポイントまたはPlaceポイントを設定する。
+  // オブジェクト上をクリックした場合は、そのオブジェクトの中心座標を使用する。
   async handlePPImageClick(event: MouseEvent) {
     if (this.ppExecuting) return;
 
@@ -908,6 +977,7 @@ export class AppState {
   }
 
   // 汎用的な座標変換関数。pixel, marker, world座標系間の変換を行う。
+  // MCPサーバーの `convert_coordinates` ツールを呼び出す。
   async convertCoordinates(x: number, y: number, source: string, target: string, z: number = 0): Promise<any> {
     const args: any = { x, y, source, target, calling_client: "web_client" };
     if (source === 'marker' || source === 'world') {
@@ -952,6 +1022,7 @@ export class AppState {
   }
 
   // ワールド座標を画像座標に変換する（軌道計算用）。エラー時はnullを返す。
+  // 軌道描画などで1点が失敗しても全体が止まらないようにエラーを抑制する。
   async convertWorldToImage(x: number, y: number, z: number): Promise<{u: number, v: number} | null> {
     try {
       // 堅牢なconvertCoordinates関数を使用するが、ここではエラーをスローしない。
@@ -967,7 +1038,8 @@ export class AppState {
     }
   }
 
-  // Geminiのツール実行ログを定期的にポーリングする
+  // Geminiのツール実行ログを定期的にポーリングする。
+  // 取得したログから、検出結果や実行された移動コマンド（軌道）を解析して可視化に反映する。
   async pollGeminiLogs() {
     if (!this.geminiLive && !this.cliMonitor) {
       this.isPollingLogs = false;
@@ -1005,7 +1077,7 @@ export class AppState {
     }
   }
 
-  // Geminiによって実行されたコマンドから軌道を更新する
+  // Geminiによって実行された "move" コマンド列を解析し、軌道を可視化する。
   async updateGeminiTrajectory(commands: string) {
     const cmds = commands.split(";");
     const points3D = [];
@@ -1045,7 +1117,7 @@ export class AppState {
     this.geminiTrajectoryPoints = results.filter((p) => p !== null);
   }
 
-  // Geminiのログから検出結果や軌道などの視覚情報をパースして状態を更新する
+  // Geminiのログから検出結果や軌道などの視覚情報をパースして状態を更新する。
   async parseGeminiVisuals(logs: any[]) {
     // 最新のget_live_imageログから検出結果を取得
     const latestLog = logs.length > 0 ? logs[0] : null;
@@ -1073,7 +1145,7 @@ export class AppState {
     }
   }
 
-  // Gemini CLIモニターの表示を切り替える
+  // Gemini CLIモニター（MJPEGストリーム）の表示を切り替える。
   toggleCliMonitor() {
     this.cliMonitor = !this.cliMonitor;
     if (this.cliMonitor) {
@@ -1086,7 +1158,7 @@ export class AppState {
     }
   }
 
-  // ジョイパッドの状態を定期的にポーリングする
+  // ジョイパッドの状態を定期的にポーリングし、`joypadLeft`, `joypadRight` 状態を更新する。
   startJoypadPolling() {
     const loop = async () => {
         if (!this.ppExecuting) { // Pick&Place実行中はポーリングしない
@@ -1113,7 +1185,8 @@ export class AppState {
     loop();
   }
 
-  // ロボットのステータスを定期的にポーリングする
+  // ロボットのステータス（TCP座標、関節角度）を定期的にポーリングする。
+  // `dump` ツールを使用する。
   startRobotStatusPolling() {
     const loop = async () => {
         // 他の重い処理中はポーリングをスキップ
@@ -1140,7 +1213,7 @@ export class AppState {
     loop();
   }
 
-  // 接続成功時に効果音を再生する
+  // 接続成功時にブラウザで効果音（正弦波）を再生する。
   playConnectedSound() {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -1159,7 +1232,8 @@ export class AppState {
     } catch (e) {}
   }
 
-  // Gemini Liveの接続/切断を切り替える
+  // Gemini Liveの接続/切断を切り替える。
+  // 接続時は `GeminiLiveClient` を初期化し、各種イベントハンドラ（音声認識、発話、ツール呼び出し）を設定する。
   async toggleGeminiLive() {
     this.geminiLive = !this.geminiLive;
     if (this.geminiLive) {
@@ -1172,7 +1246,19 @@ export class AppState {
 
       // GeminiLiveClientをインスタンス化し、コールバックを設定
       this.geminiClient = new GeminiLiveClient({
-        onConnect: () => { this.geminiStatus = "Connected"; this.playConnectedSound(); console.log('Gemini Status:', this.geminiStatus); this.geminiLiveMonitorLoaded = true; },
+        onConnect: () => {
+            this.geminiStatus = "Connected";
+            this.playConnectedSound();
+            console.log('Gemini Status:', this.geminiStatus);
+            this.geminiLiveMonitorLoaded = true;
+            // 接続時に自発的に画像を取得し、ユーザーに話しかけるよう促す
+            const initialMessage = `以下はロボットアーム操作に関する物理学の教科書です。
+---
+${physics}
+---
+この教科書を理解し、今後の操作で参照してください。`;
+            this.geminiClient?.sendText(initialMessage);
+        },
         onDisconnect: () => { this.geminiStatus = "Disconnected"; this.geminiMicLevel = 0; this.geminiSpeakerLevel = 0; },
         onError: (e) => { this.geminiStatus = `Error: ${e.message || e}`; if (this.geminiLive) this.toggleGeminiLive(); },
         onVolume: (mic, speaker) => { this.geminiMicLevel = mic; this.geminiSpeakerLevel = speaker; },

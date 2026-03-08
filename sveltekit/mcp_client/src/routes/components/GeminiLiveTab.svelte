@@ -1,8 +1,12 @@
 <script lang="ts">
   import type { AppState } from "$lib/app-state.svelte";
   import { getColorForObject, getTextColor } from "$lib/utils";
-  import LiveButton from "./LiveButton.svelte";
+  import LiveButton from "./parts/LiveButton.svelte";
 
+  /**
+   * Gemini Live機能（マルチモーダル対話）を制御・モニタリングするためのタブコンポーネント。
+   * リアルタイムの映像、音声レベル、対話ログ、ツール実行状況を表示します。
+   */
   let { appState }: { appState: AppState } = $props();
   let reasoningPathLogElement: HTMLElement | null = null;
 
@@ -25,6 +29,7 @@
 </script>
 
 <div class="container-fluid mt-1 mb-1">
+  <!-- --- ヘッダーコントロール --- -->
   <div class="row mb-3">
     <div class="col-12 d-flex align-items-center gap-3">
       <LiveButton
@@ -36,7 +41,7 @@
     </div>
   </div>
   <div class="row">
-    <!-- Left: Live Monitor -->
+    <!-- --- 左パネル: ライブモニターとステータス --- -->
     <div class="col-md-6 d-flex flex-column gap-3">
       <div class="card rounded-bottom-0">
         <div class="card-header">Live Monitor</div>
@@ -45,7 +50,7 @@
           style="height: 350px; overflow: hidden;"
         >
           {#if appState.geminiLive}
-
+            <!-- ライブ映像 -->
             <img
               src={appState.geminiLiveMonitorImageSrc}
               alt="Gemini Monitor View"
@@ -63,6 +68,7 @@
               }}
             />
           {:else}
+            <!-- オフライン時の表示 -->
             <div
               class="d-flex align-items-center justify-content-center h-100 blink-subtle"
               style="color: #00bb00; font-family: 'Orbitron', monospace; letter-spacing: 2px;"
@@ -72,7 +78,7 @@
           {/if}
 
 
-            <!-- Detections Overlay -->
+            <!-- 物体検出結果のオーバーレイ表示 -->
             {#each appState.geminiDetections as obj}
               {@const color = getColorForObject(obj)}
               <div
@@ -118,7 +124,7 @@
               {/if}
             {/each}
 
-            <!-- Trajectory Overlay -->
+            <!-- 軌道のオーバーレイ表示 -->
             {#if appState.geminiTrajectoryPoints.length > 0 && appState.geminiImageDim}
               <svg
                 viewBox="0 0 {appState.geminiImageDim.w} {appState.geminiImageDim.h}"
@@ -138,6 +144,7 @@
             {/if}
         </div>
       </div>
+      <!-- ステータスパネル (接続状態、音声レベル) -->
       <div class="card special-bg">
         <div class="card-header">Status</div>
         <div class="card-body">
@@ -168,17 +175,19 @@
         </div>
       </div>
     </div>
-    <!-- Right: Conversation Log -->
+    <!-- --- 右パネル: 会話・推論ログ --- -->
     <div class="col-md-6">
       <div class="card h-100 d-flex flex-column special-bg" style="max-height: 600px;">
         <div class="card-header">{appState.t.gemini_live_reasoning_path_header}</div>
         <div class="card-body p-0 d-flex flex-column" style="overflow: hidden;">
           {#if !appState.geminiLive}
+            <!-- 待機中のメッセージ -->
             <div class="p-3 text-center text-muted">
               <p>Press the "Live" button above the monitor to start voice control.</p>
               <p>Try saying: "What do you see?"</p>
             </div>
           {:else}
+            <!-- ログ表示エリア -->
             <div class="reasoning-path-log flex-grow-1 overflow-auto p-2" style="min-height: 0;" bind:this={reasoningPathLogElement}>
               {#each appState.geminiLiveLog as log, i (i)}
                 {#if log.source === 'tool'}
@@ -204,6 +213,7 @@
                   </div>
                 {/if}
               {/each}
+              <!-- 音声認識の中間結果表示 -->
               {#if appState.geminiInterimTranscript}
                 <div class="log-entry log-user interim">
                   <strong class="log-source">user</strong>

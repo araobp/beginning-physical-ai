@@ -11,12 +11,18 @@
 
 ## 経緯と目的
 
-フィジカルAIって何？つくりながら勉強してみる。勉強がうまくいったら、最安価フィジカルAI学習キット化を目指す。
+フィジカルAIって何？つくりながら勉強してみる。
 
 - 10年前のIoTブーム開始から6年間、IoT/AI/AR/3Dデジタルツインのプロトタイプつくっては現場で実験してきた経験あり、それが、フィジカルAI学習の土台になる。
 - 「フィジカルAI勉強したいけどロボット高価で手が出せない」＝＞「[自作シミュレーター上でロボット動かしVLAも評価](https://github.com/araobp/unity-robotics)、しかし、フィジカルな部分を十分に勉強出来なかった」
 - 最安価なロボットでも良いから、実際に触れて動かすことで、フィジカルな部分を勉強する。
 - その勉強の過程をQiitaやYouTubeで公開する。
+
+## つくって動かしてみて、見えてきた結論
+
+- フィジカルAIブームと現実論：中国は人型ロボットがすごい、日本は産業用ロボット大国だから。。。とロボット視点だけで見ているのが間違っていそう
+- 近々での実用：生成AIをUIのところへ使う、従来制御技術や従来AIとの分業、サイロ化の解消から生まれる大きな価値
+- Gemini Liveの魅力と可能性：フィジカルであるなしにかかわらず、UIとしてのすばらしさと、その汎用性。日本語がまだ苦手だが。
 
 ## Qiita記事投稿
 
@@ -44,7 +50,7 @@
 ### 準備ツール
 
 - [カメラ歪み補正、ArUcoマーカー](https://github.com/araobp/beginning-physical-ai/tree/main/python/vision)
-- [転移学習(YOLO11 Nano向け、開発中)](https://github.com/araobp/beginning-physical-ai/tree/main/annotations)
+- [転移学習(YOLO11 Nano向け)](https://github.com/araobp/beginning-physical-ai/tree/main/training)
 
 ### フィジカルAIシステム（開発中）
 
@@ -53,6 +59,15 @@
 - [Robot Controller](https://github.com/araobp/beginning-physical-ai/tree/main/arduino/robot_controller)
 - [MCP Server](https://github.com/araobp/beginning-physical-ai/tree/main/python/mcp_server)
 - [MCP Client](https://github.com/araobp/beginning-physical-ai/tree/main/sveltekit/mcp_client)
+
+### Robot Arm キャリブレーション
+
+IKのキャリブレーション
+```
+$python mcp_server.py --calib-gui
+```
+
+グリッパーのキャリブレーションは、roboto_controller.ino (Arduino上のファームウエア)にて行う。
 
 ### 評価
 
